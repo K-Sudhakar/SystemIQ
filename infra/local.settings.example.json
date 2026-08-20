@@ -1,0 +1,22 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AZURE_AD_TENANT_ID": "00000000-0000-0000-0000-000000000000",
+    "AZURE_AD_API_CLIENT_ID": "00000000-0000-0000-0000-000000000000",
+    "AZURE_OPENAI_ENDPOINT": "https://replace-me.openai.azure.com/",
+    "AZURE_OPENAI_CHAT_DEPLOYMENT": "replace-me",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-small",
+    "CHAT_HISTORY_BLOB_CONTAINER_URI": "http://127.0.0.1:10000/devstoreaccount1/chat-history",
+    "GLOSSARY_BLOB_CONTAINER_URI": "http://127.0.0.1:10000/devstoreaccount1/glossary",
+    "FEEDBACK_BLOB_CONTAINER_URI": "http://127.0.0.1:10000/devstoreaccount1/feedback",
+    "AUDIT_LOG_BLOB_CONTAINER_URI": "http://127.0.0.1:10000/devstoreaccount1/audit-log",
+    "RATE_LIMIT_TABLE_ENDPOINT": "http://127.0.0.1:10002/devstoreaccount1",
+    "RATE_LIMIT_TABLE_NAME": "AccessDenials",
+    "RATE_LIMIT_DENIAL_COUNT": "5",
+    "RATE_LIMIT_WINDOW_MINUTES": "10",
+    "DATABASE_CONNECTIONS_JSON": "[]",
+    "RBAC_POLICY_JSON": "{}"
+  }
+}

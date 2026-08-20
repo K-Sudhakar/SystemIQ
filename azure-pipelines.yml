@@ -1,0 +1,145 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  buildConfiguration: Release
+  dotnetSdkVersion: 9.x
+  nodeVersion: 20.x
+
+stages:
+  - stage: Validate
+    displayName: Validate and test
+    jobs:
+      - job: Infrastructure
+        displayName: Validate Bicep
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              az bicep build --file infra/main.bicep --outfile "$(Build.ArtifactStagingDirectory)/main.json"
+            displayName: Compile Bicep
+          - publish: $(Build.ArtifactStagingDirectory)/main.json
+            artifact: infrastructure
+
+      - job: Backend
+        displayName: Build and test backend
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - task: UseDotNet@2
+            inputs:
+              packageType: sdk
+              version: $(dotnetSdkVersion)
+          - script: dotnet restore SystemIQ.sln
+            displayName: Restore
+          - script: dotnet build SystemIQ.sln --configuration $(buildConfiguration) --no-restore
+            displayName: Build
+          - script: dotnet test SystemIQ.sln --configuration $(buildConfiguration) --no-build --logger trx --collect:"XPlat Code Coverage"
+            displayName: Test
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '**/*.trx'
+          - script: dotnet publish src/SystemIQ.Functions/SystemIQ.Functions.csproj --configuration $(buildConfiguration) --no-build --output "$(Build.ArtifactStagingDirectory)/api"
+            displayName: Publish Function App
+          - task: ArchiveFiles@2
+            inputs:
+              rootFolderOrFile: $(Build.ArtifactStagingDirectory)/api
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: $(Build.ArtifactStagingDirectory)/api.zip
+              replaceExistingArchive: true
+          - publish: $(Build.ArtifactStagingDirectory)/api.zip
+            artifact: api
+
+      - job: Frontend
+        displayName: Build and test frontend
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(nodeVersion)
+          - script: |
+              if [ -f package-lock.json ]; then
+                npm ci
+              else
+                npm install --no-audit --no-fund
+              fi
+            workingDirectory: client
+            displayName: Install
+          - script: npm run typecheck
+            workingDirectory: client
+            displayName: Type check
+          - script: npm test -- --passWithNoTests
+            workingDirectory: client
+            displayName: Test
+          - script: npm run build
+            workingDirectory: client
+            displayName: Build
+            env:
+              VITE_API_BASE_URL: $(apiBaseUrl)
+              VITE_AZURE_CLIENT_ID: $(spaClientId)
+              VITE_AZURE_TENANT_ID: $(entraTenantId)
+              VITE_AZURE_API_SCOPE: $(apiScope)
+              VITE_DEV_AUTH_BYPASS: 'false'
+          - publish: client/dist
+            artifact: web
+
+  - stage: Deploy
+    displayName: Deploy production
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: Production
+        displayName: Deploy infrastructure and applications
+        environment: dataiq-production
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: api
+                - download: current
+                  artifact: web
+                - task: AzureCLI@2
+                  displayName: Deploy infrastructure
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      az deployment group create \
+                        --resource-group "$(azureResourceGroup)" \
+                        --template-file infra/main.bicep \
+                        --parameters @"$(bicepParametersFile)"
+                - task: AzureFunctionApp@2
+                  displayName: Deploy Function App
+                  inputs:
+                    azureSubscription: $(azureServiceConnection)
+                    appType: functionAppLinux
+                    appName: $(functionAppName)
+                    package: $(Pipeline.Workspace)/api/api.zip
+                - task: AzureStaticWebApp@0
+                  displayName: Deploy Static Web App
+                  inputs:
+                    app_location: $(Pipeline.Workspace)/web
+                    skip_app_build: true
+                    skip_api_build: true
+                    azure_static_web_apps_api_token: $(staticWebAppDeploymentToken)
