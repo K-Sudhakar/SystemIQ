@@ -66,12 +66,12 @@ public sealed class SqlSafetyValidator
 
 public sealed class AuditLogService
 {
-    private readonly TokenCredential _credential;
+    private readonly StorageClientFactory _clients;
     private readonly TimeProvider _clock;
 
-    public AuditLogService(TokenCredential credential, TimeProvider clock)
+    public AuditLogService(StorageClientFactory clients, TimeProvider clock)
     {
-        _credential = credential;
+        _clients = clients;
         _clock = clock;
     }
 
@@ -82,14 +82,16 @@ public sealed class AuditLogService
         string reason,
         CancellationToken cancellationToken)
     {
-        var containerUri = Environment.GetEnvironmentVariable("AUDIT_LOG_BLOB_CONTAINER_URI");
-        if (string.IsNullOrWhiteSpace(containerUri))
-        {
-            throw new InvalidOperationException("AUDIT_LOG_BLOB_CONTAINER_URI is required; audit logging fails closed.");
-        }
-
         var entry = new AuditLogEntry(userObjectId, questionOrSql, connectionId, reason, _clock.GetUtcNow());
-        var container = new BlobContainerClient(new Uri(containerUri), _credential);
+        BlobContainerClient container;
+        try
+        {
+            container = _clients.BlobContainer("AUDIT_LOG_BLOB_CONTAINER_URI", "audit-log");
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException("AUDIT_LOG_BLOB_CONTAINER_URI is required; audit logging fails closed.", ex);
+        }
         var name = $"audit-log/{Safe(userObjectId)}/{entry.Timestamp:yyyyMMddTHHmmssfffffffZ}_{Guid.NewGuid():N}.json";
         var data = BinaryData.FromObjectAsJson(entry, JsonOptions.Default);
         await container.GetBlobClient(name).UploadAsync(data, new BlobUploadOptions
@@ -105,13 +107,13 @@ public sealed record RateLimitStatus(bool IsLimited, DateTimeOffset? RetryAfter,
 
 public sealed class AccessDenialRateLimiter
 {
-    private readonly TokenCredential _credential;
+    private readonly StorageClientFactory _clients;
     private readonly TimeProvider _clock;
     private readonly ILogger<AccessDenialRateLimiter> _logger;
 
-    public AccessDenialRateLimiter(TokenCredential credential, TimeProvider clock, ILogger<AccessDenialRateLimiter> logger)
+    public AccessDenialRateLimiter(StorageClientFactory clients, TimeProvider clock, ILogger<AccessDenialRateLimiter> logger)
     {
-        _credential = credential;
+        _clients = clients;
         _clock = clock;
         _logger = logger;
     }
@@ -164,12 +166,9 @@ public sealed class AccessDenialRateLimiter
 
     private TableClient Client()
     {
-        var endpoint = Environment.GetEnvironmentVariable("RATE_LIMIT_TABLE_ENDPOINT");
-        if (string.IsNullOrWhiteSpace(endpoint))
-        {
-            throw new InvalidOperationException("RATE_LIMIT_TABLE_ENDPOINT is required; rate limiting fails closed.");
-        }
-        return new TableClient(new Uri(endpoint), Environment.GetEnvironmentVariable("RATE_LIMIT_TABLE_NAME") ?? "AccessDenials", _credential);
+        return _clients.Table(
+            "RATE_LIMIT_TABLE_ENDPOINT",
+            Environment.GetEnvironmentVariable("RATE_LIMIT_TABLE_NAME") ?? "AccessDenials");
     }
 
     private static string Hash(string value) =>

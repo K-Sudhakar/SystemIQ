@@ -2,27 +2,99 @@ using System.Text.Json;
 using Azure.Core;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Data.Tables;
+using Microsoft.Extensions.Hosting;
 using SystemIQ.Functions.Models;
 
 namespace SystemIQ.Functions.Services;
 
-internal sealed class BlobJsonStore
+public sealed class StorageClientFactory
 {
     private readonly TokenCredential _credential;
-    private readonly string _setting;
 
-    public BlobJsonStore(TokenCredential credential, string setting)
-    {
-        _credential = credential;
-        _setting = setting;
-    }
+    public StorageClientFactory(TokenCredential credential) => _credential = credential;
 
-    public BlobContainerClient Container()
+    public string? LocalConnectionString =>
+        Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING") is { Length: > 0 } configured
+            ? configured
+            : Environment.GetEnvironmentVariable("AzureWebJobsStorage")
+                ?.Equals("UseDevelopmentStorage=true", StringComparison.OrdinalIgnoreCase) == true
+                ? "UseDevelopmentStorage=true"
+                : null;
+
+    public BlobContainerClient BlobContainer(string endpointSetting, string localContainerName)
     {
-        var uri = Environment.GetEnvironmentVariable(_setting);
-        if (string.IsNullOrWhiteSpace(uri)) throw new InvalidOperationException($"{_setting} is required.");
+        if (LocalConnectionString is { } connectionString)
+        {
+            return new BlobContainerClient(connectionString, localContainerName);
+        }
+
+        var uri = Environment.GetEnvironmentVariable(endpointSetting);
+        if (string.IsNullOrWhiteSpace(uri)) throw new InvalidOperationException($"{endpointSetting} is required.");
         return new BlobContainerClient(new Uri(uri), _credential);
     }
+
+    public TableClient Table(string endpointSetting, string tableName)
+    {
+        if (LocalConnectionString is { } connectionString)
+        {
+            return new TableClient(connectionString, tableName);
+        }
+
+        var endpoint = Environment.GetEnvironmentVariable(endpointSetting);
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException($"{endpointSetting} is required; rate limiting fails closed.");
+        }
+        return new TableClient(new Uri(endpoint), tableName, _credential);
+    }
+}
+
+public sealed class LocalStorageInitializer : IHostedService
+{
+    private readonly StorageClientFactory _clients;
+
+    public LocalStorageInitializer(StorageClientFactory clients) => _clients = clients;
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (_clients.LocalConnectionString is null)
+        {
+            return;
+        }
+
+        foreach (var (setting, name) in new[]
+        {
+            ("CHAT_HISTORY_BLOB_CONTAINER_URI", "chat-history"),
+            ("GLOSSARY_BLOB_CONTAINER_URI", "glossary"),
+            ("FEEDBACK_BLOB_CONTAINER_URI", "feedback"),
+            ("AUDIT_LOG_BLOB_CONTAINER_URI", "audit-log")
+        })
+        {
+            await _clients.BlobContainer(setting, name).CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        }
+
+        var tableName = Environment.GetEnvironmentVariable("RATE_LIMIT_TABLE_NAME") ?? "AccessDenials";
+        await _clients.Table("RATE_LIMIT_TABLE_ENDPOINT", tableName).CreateIfNotExistsAsync(cancellationToken);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+internal sealed class BlobJsonStore
+{
+    private readonly StorageClientFactory _clients;
+    private readonly string _setting;
+    private readonly string _localContainerName;
+
+    public BlobJsonStore(StorageClientFactory clients, string setting, string localContainerName)
+    {
+        _clients = clients;
+        _setting = setting;
+        _localContainerName = localContainerName;
+    }
+
+    public BlobContainerClient Container() => _clients.BlobContainer(_setting, _localContainerName);
 
     public async Task<T?> ReadAsync<T>(string name, CancellationToken cancellationToken)
     {
@@ -64,7 +136,8 @@ internal sealed class BlobJsonStore
 public sealed class BlobChatHistoryStore
 {
     private readonly BlobJsonStore _store;
-    public BlobChatHistoryStore(TokenCredential credential) => _store = new(credential, "CHAT_HISTORY_BLOB_CONTAINER_URI");
+    public BlobChatHistoryStore(StorageClientFactory clients) =>
+        _store = new(clients, "CHAT_HISTORY_BLOB_CONTAINER_URI", "chat-history");
 
     public Task<List<ChatMessage>?> LoadAsync(string userObjectId, string connectionId, CancellationToken cancellationToken) =>
         _store.ReadAsync<List<ChatMessage>>(Path(userObjectId, connectionId), cancellationToken);
@@ -83,7 +156,8 @@ public sealed class BlobChatHistoryStore
 public sealed class GlossaryStore
 {
     private readonly BlobJsonStore _store;
-    public GlossaryStore(TokenCredential credential) => _store = new(credential, "GLOSSARY_BLOB_CONTAINER_URI");
+    public GlossaryStore(StorageClientFactory clients) =>
+        _store = new(clients, "GLOSSARY_BLOB_CONTAINER_URI", "glossary");
 
     public async Task<List<GlossaryEntry>> LoadAsync(string connectionId, CancellationToken cancellationToken) =>
         await _store.ReadAsync<List<GlossaryEntry>>($"glossary/{Uri.EscapeDataString(connectionId)}.json", cancellationToken) ?? [];
@@ -131,9 +205,9 @@ public sealed class FeedbackService
     private readonly BlobChatHistoryStore _history;
     private readonly TimeProvider _clock;
 
-    public FeedbackService(TokenCredential credential, BlobChatHistoryStore history, TimeProvider clock)
+    public FeedbackService(StorageClientFactory clients, BlobChatHistoryStore history, TimeProvider clock)
     {
-        _store = new(credential, "FEEDBACK_BLOB_CONTAINER_URI");
+        _store = new(clients, "FEEDBACK_BLOB_CONTAINER_URI", "feedback");
         _history = history;
         _clock = clock;
     }

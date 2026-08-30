@@ -37,7 +37,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("GetGlossaryDefaults")]
     public async Task<IActionResult> GetGlossaryDefaults(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/glossary/{connectionId}/defaults")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "curation/glossary/{connectionId}/defaults")] HttpRequest request,
         string connectionId,
         CancellationToken cancellationToken)
     {
@@ -55,7 +55,7 @@ public sealed class AdminFunctions : FunctionBase
             {
                 await _access.RecordDenialAsync(
                     userId,
-                    $"GET admin/glossary/{connectionId}/defaults",
+                    $"GET curation/glossary/{connectionId}/defaults",
                     connectionId,
                     "Connection is not permitted.",
                     cancellationToken);
@@ -74,7 +74,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("GetGlossary")]
     public async Task<IActionResult> GetGlossary(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/glossary/{connectionId}")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "curation/glossary/{connectionId}")] HttpRequest request,
         string connectionId,
         CancellationToken cancellationToken)
     {
@@ -84,7 +84,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("PutGlossary")]
     public async Task<IActionResult> PutGlossary(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "admin/glossary/{connectionId}/{table}")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "put", Route = "curation/glossary/{connectionId}/{table}")] HttpRequest request,
         string connectionId,
         string table,
         CancellationToken cancellationToken)
@@ -105,7 +105,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("GetFeedbackInbox")]
     public async Task<IActionResult> GetFeedbackInbox(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/feedback")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "curation/feedback")] HttpRequest request,
         CancellationToken cancellationToken)
     {
         var auth = await AuthorizeAsync(request, true, cancellationToken);
@@ -115,7 +115,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("ProcessFeedback")]
     public async Task<IActionResult> ProcessFeedback(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "admin/feedback/process")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "curation/feedback/process")] HttpRequest request,
         CancellationToken cancellationToken)
     {
         var auth = await AuthorizeAsync(request, true, cancellationToken);
@@ -125,7 +125,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("ResolveFeedback")]
     public async Task<IActionResult> ResolveFeedback(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "admin/feedback/{id}/resolve")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "curation/feedback/{id}/resolve")] HttpRequest request,
         string id,
         CancellationToken cancellationToken)
     {
@@ -144,7 +144,7 @@ public sealed class AdminFunctions : FunctionBase
 
     [Function("AccuracyReport")]
     public async Task<IActionResult> AccuracyReport(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "admin/accuracy-report")] HttpRequest request,
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "curation/accuracy-report")] HttpRequest request,
         CancellationToken cancellationToken)
     {
         var auth = await AuthorizeAsync(request, true, cancellationToken);

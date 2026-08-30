@@ -14,6 +14,8 @@ builder.ConfigureFunctionsWebApplication();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<TokenCredential, DefaultAzureCredential>();
 builder.Services.AddSingleton<BearerTokenValidator>();
+builder.Services.AddSingleton<StorageClientFactory>();
+builder.Services.AddHostedService<LocalStorageInitializer>();
 builder.Services.AddSingleton<ConnectionCatalog>();
 builder.Services.AddSingleton<SqlSafetyValidator>();
 builder.Services.AddSingleton<AccessPolicyService>();

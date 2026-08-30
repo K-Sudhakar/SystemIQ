@@ -1,350 +1,442 @@
 ---
 Document ID: PRD-2026-001
-Label: prd-dataiq-sql-assistant
-Version: 1.0.0
-Status: Draft
-Date: 2026-07-29
-Scale Depth: LIGHT
-Total Requirements: 14
-Readiness Score: 4.88 (PASS)
+Label: prd-systemiq-nl-to-sql
+Version: 1.0.4
+Status: Implementation Ready
+Date: 2026-08-28
+Scale Depth: MEDIUM
+Total Requirements: 23
+Readiness Score: 4.88 (PASS — Implementation Ready)
 ---
 
-# DataIQ SQL Assistant — Product Requirements Document
+# SystemIQ — Product Requirements Document
 
 ## PRD Health Summary
 
-- **Requirements by priority:** Must (12), Should (2), Could (0), Won't (0)
-- **AC coverage:** 14/14 requirements have acceptance criteria (100%) — 27 ACs total; every Must has ≥2 ACs
-- **Risk flags:** 12 of 14 requirements flagged (all Medium and High complexity items; the 2 Low-complexity items are unflagged by design)
-- **Dependency count:** 10 dependent requirements comprising 12 cross-requirement dependency edges
-- **Ambiguity markers:** 0 open — all 5 `[NEEDS CLARIFICATION]` items resolved in v1.0.1
-- **Open external blockers:** 2 (see Open External Dependencies & Blockers)
+- **Requirements:** 23 — Must 20, Should 3; 81 acceptance criteria; 100% coverage
+- **Risk coverage:** 23/23 requirements
+- **Dependencies:** 21 dependent requirements, 64 edges, no cycle identified
+- **Ambiguities:** 0 open
+- **Readiness:** PASS and implementation-ready; D-01 through D-06 are closed or baselined for implementation, with remaining external inputs explicitly non-blocking for the portable provider architecture
 
 ## Product Summary
 
-**Problem:** Non-technical business users — Clinical Operations, Care Management, and Business Analysts — need timely access to data held in the MP3 and BabyTrax databases, but getting answers today requires SQL syntax, internal schema knowledge, table relationships, joins, and filter logic they don't have. This leaves them dependent on developers/analysts to write ad hoc queries, or on a previously-tried self-service tool that had its own limitations. A prior architecture (Blazor Server monolith with a CLI fallback mode) has already been retired in favor of the current Azure Functions + React design this PRD describes.
+SystemIQ is a generic, domain-neutral Natural-Language-to-SQL platform. It enables an authorized user to select a configured relational database, ask a question in ordinary language, retrieve relevant schema and business-glossary context, generate dialect-correct read-only SQL through configured AI providers, execute it with a least-privilege database identity, and receive a natural-language answer plus actual result rows.
 
-**Solution:** DataIQ SQL Assistant lets these users ask questions in plain English against a selected database connection, translates the question into SQL using an LLM (Azure OpenAI via Semantic Kernel) grounded in a curated per-connection business glossary, executes it read-only against Azure SQL, and streams back a natural-language answer plus the underlying data — all under RBAC enforcement consistent with a hard HIPAA/PHI compliance mandate.
+The product must not assume Demo Clinical Operations, MP3, BabyTrax, healthcare terminology, Azure SQL, or any other single domain/database. Those may exist only as optional sample configurations. Each connection/domain has a configurable glossary containing its own terms, synonyms, schema mappings, and join guidance.
 
-**Value proposition:** Removes the schema/SQL literacy barrier for self-service data access, while keeping access control, auditability, and answer quality (via a continuously-curated glossary) as first-class, not bolted on.
+Database, AI, storage, identity, secret, and hosting integrations must be explicitly configured providers rather than Azure assumptions. Azure Blob Storage, Azure OpenAI, Entra ID, Key Vault, and Azure-hosted databases may remain production options.
 
-**Target users:** One combined persona — the **non-technical business user** (Clinical Operations, Care Management, Business Analysts) — treated uniformly for this PRD, since their core need (ask in plain English, get a trustworthy answer) is shared even though the specific questions they ask differ.
+### Users
 
-## User Analysis
+- Business users ask domain questions and inspect answers and rows.
+- Data/domain curators maintain per-connection glossary content.
+- Administrators configure providers, connections, policies, identity, and secrets.
+- Developers/operators run SystemIQ locally or on a supported container platform.
 
-**Persona: Non-technical business user**
-- **Pain today:** Cannot write SQL; doesn't know table/column names or how tables relate; a prior self-service tool didn't fully solve this (specific limitation not captured in detail — deprioritized during elicitation).
-- **Goal:** Ask a question in ordinary language and get a correct, understandable answer without waiting on a developer.
-- **Success metric:** Percentage of questions answered correctly without developer intervention, measured via the existing thumbs-up/thumbs-down feedback signal (see REQ-013).
+## Key Journeys
 
-## Key User Journeys
+### J1 — complete local flow
 
-### Journey 1: Ask a permitted data question
-1. The user signs in and sees only database connections allowed by their current access policy.
-2. The user selects a connection and asks a question in ordinary language.
-3. DataIQ grounds the request using the connection's glossary, generates and validates read-only SQL, and executes it.
-4. The user sees a streaming natural-language answer and the underlying rows, or an explicit no-results response.
-5. The user optionally provides thumbs-up or thumbs-down feedback.
+Start the documented local profile without an Azure subscription or Storage account → select a MySQL connection → ask a natural-language question → retrieve MySQL schema and glossary/RAG context → generate MySQL SQL → validate and execute it read-only → receive actual rows and an answer.
 
-### Journey 2: Resume work on a connection
-1. The user returns to DataIQ and selects a previously used connection.
-2. DataIQ restores that user's conversation for the selected connection without leaking or displaying history from another connection.
-3. The user asks a follow-up question using the restored conversation as context.
+### J2 — configure a new domain
 
-### Journey 3: Encounter restricted or unavailable data
-1. The user asks for data outside their effective policy, directly or through an indirect join.
-2. DataIQ blocks the generated query before execution, records the denied attempt, and explains that the requested data is unavailable under the user's policy.
-3. Repeated denials trigger the configured rate limit without exposing restricted schema details.
+An administrator adds provider metadata and a secret reference without code changes. A curator creates that connection's glossary. Provider-specific schema discovery supplies grounding, and other domains remain isolated.
 
-### Journey 4: Curate terminology after poor feedback
-1. A user gives an answer thumbs-down and optionally supplies a reason or comment.
-2. The daily or on-demand processor creates a review item tied to the matched glossary terms.
-3. An authorized curator reviews the item, updates the relevant glossary entry when needed, and resolves the item.
+### J3 — governed query
+
+An authenticated user sees only permitted connections. SystemIQ blocks denied objects and unsafe SQL before execution, durably audits the denial, rate-limits repeated denials, and does not disclose restricted schema.
+
+### J4 — history and feedback
+
+Per-user/per-connection history is restored without cross-connection leakage. Negative feedback creates an idempotent review tied to matched terms; an authorized curator can resolve it.
 
 ## Goals and Non-Goals
 
-**Goals:**
-- Let non-technical users self-serve data questions in plain English.
-- Keep answer quality high and improving over time via a curated, feedback-driven business glossary.
-- Enforce RBAC and HIPAA/PHI-consistent access control on every query, with audit logging of denied attempts.
-- Recover gracefully from AI-service unavailability and SQL-generation failures without compounding errors across retries.
+### Goals
 
-**Non-Goals (this release):**
-- Data-modifying operations (INSERT/UPDATE/DELETE/DDL) — the assistant is read-only by design (REQ-014).
-- Automatic multi-attempt retry of a failed query without user action — the accepted safety net is a user-initiated retry (per elicitation), not system auto-retry.
-- Alternate AI-service fallback/failover — "service unavailable, try later" messaging is the accepted behavior; no secondary model or queue-and-retry path is in scope.
-- **Deployment, operations, and monitoring requirements** — out of scope for this document. **Rationale:** this PRD is deliberately scoped to product behavior (what the system does for users) at LIGHT depth for a solo effort; infrastructure provisioning, CI/CD, alerting, and runbooks are a separate concern with a different audience and lifecycle. **Tracking home:** deployment readiness is tracked operationally through the repository's `infra/` assets (Bicep template, `grant-deployment-permissions.ps1`) and the Azure DevOps pipeline definition, not through requirements in this PRD. **Known open blocker:** production is currently non-functional pending a Key Vault permission grant — see Open External Dependencies & Blockers.
+- Generic NL-to-SQL with domain-configurable grounding.
+- MySQL first; PostgreSQL next; future relational providers without redesign.
+- Independently configurable chat-completion and embedding/RAG providers.
+- Full local development without an Azure subscription or Azure Storage account.
+- Safe local storage plus Azure Blob as an optional production provider.
+- A staged move to container-friendly ASP.NET Core and Kubernetes-compatible scheduling.
+- Read-only execution, authorization, durable audit, and secret hygiene across providers.
 
-## Product Success Criteria
+### Non-goals
 
-The baseline period begins only after B-1 and B-3 are resolved and the product is available to a representative pilot group. Unless the product owner approves a different interval, report the first complete 30-day period and use it to set numeric targets rather than inventing pre-launch thresholds.
+- Data-modifying SQL is never permitted.
+- Google Colab is not production inference, a secret store, or a location for production/regulated data.
+- Kubernetes manifests, Helm charts, or application implementation are not part of this refinement.
+- Self-hosting every dependency in Kubernetes is not required.
+- Automatic AI-provider failover is not required initially.
+- Selected Azure providers do not need to be removed from deployments that intentionally use them.
 
-| ID | Outcome | Measure | Initial decision rule | Requirement coverage |
-|---|---|---|---|---|
-| SC-1 | Users can self-serve useful answers | Rated-answer thumbs-up rate, reported with feedback participation rate | Establish a 30-day baseline, then obtain product-owner approval for a numeric target and review cadence | REQ-001, REQ-013 |
-| SC-2 | Users are less dependent on developers for routine questions | Percentage of pilot questions completed without developer/analyst intervention | Instrument or sample during the baseline period; set a target after the current intervention rate is known | REQ-001, REQ-002, REQ-005 |
-| SC-3 | Access controls prevent unauthorized retrieval | Count of executed queries that reference denied connections, tables, or columns | Must remain zero; denied attempts are expected and measured separately | REQ-008, REQ-009, REQ-014 |
-| SC-4 | Glossary curation closes the quality loop | Pending feedback age and percentage of negative-feedback items resolved | Establish baseline volume and curator capacity; approve a service-level target after ownership is assigned | REQ-006, REQ-007 |
-| SC-5 | Recoverable failures do not poison subsequent attempts | Percentage of user-initiated retries whose model context excludes the failed turn | 100% for recognized failure fallbacks | REQ-011 |
+## Success Criteria
 
-### Goal Traceability
-
-| Goal | Requirements | Success criteria |
+| ID | Outcome and decision rule | Coverage |
 |---|---|---|
-| Plain-English self-service | REQ-001–REQ-004 | SC-1, SC-2 |
-| High and improving answer quality | REQ-005–REQ-007, REQ-013 | SC-1, SC-4 |
-| RBAC and HIPAA/PHI-consistent access | REQ-008–REQ-010, REQ-012, REQ-014 | SC-3 |
-| Graceful recovery without compounded failures | REQ-011 | SC-5 |
+| SC-1 | A clean environment passes J1 at 100% without Azure login, subscription, or Storage account; the canned demo API does not count | REQ-001, 002, 005, 014–018, 020–023 |
+| SC-2 | MySQL integration/evaluation tests cover schema, quoting, limits, joins, dates, cancellation, validation, and read-only execution; all safety cases pass | REQ-014, 017, 018 |
+| SC-3 | A new provider can be added without changing domain orchestration or another provider; capability/conformance tests expose differences | REQ-016–021 |
+| SC-4 | Executed statements violating policy or read-only rules remain zero | REQ-008, 009, 014, 017 |
+| SC-5 | Connections maintain independent, non-healthcare-default glossary/RAG content | REQ-005–007, 021 |
+| SC-6 | Quality reporting includes feedback participation, database/dialect, and AI provider/model; targets follow a representative baseline | REQ-013, 020, 021 |
+| SC-7 | ASP.NET Core API and one-shot processor pass contract, health, shutdown, and container smoke tests before Kubernetes work | REQ-022, 023 |
 
-## Technical Constraints & Dependencies
+## Architecture Direction
 
-**Platform and stack (fixed):**
-- Backend: .NET 9, Azure Functions isolated worker with ASP.NET Core integration, hosted on an EP1 Premium plan
-- Frontend: React + Vite single-page application, hosted on Azure Static Web Apps
-- AI: Azure OpenAI (chat completion deployment for SQL generation and answering; `text-embedding-3-small` for schema-relevance selection) orchestrated via Microsoft Semantic Kernel
-- Identity: Azure AD — MSAL.js in the SPA, JWT bearer validation in the API (paired SPA + API app registrations)
-- Storage: Azure Blob Storage for chat history, the writable business glossary, and the feedback queue
-- Secrets: Azure Key Vault for connection strings, AI credentials, and the RBAC access policy
-- Data: Azure SQL — the MP3 and BabyTrax databases, accessed **read-only** (see REQ-014)
+### Current
 
-**Compliance constraint (hard mandate):**
-- HIPAA/PHI compliance is mandatory, not optional. This constrains data residency, encryption, access control, audit logging, and retention across every requirement in this document (see REQ-008, REQ-009, REQ-012).
+React/Vite → MSAL/Entra → .NET 9 Azure Functions (HTTP + timer) → Azure OpenAI, SQL Server/Azure SQL, Azure Blob for history/glossary/feedback/audit, Azure Table for denial state, and raw environment JSON for catalog/policy. `AzureWebJobsStorage` is needed by the Functions timer. Embedding configuration exists but is unused.
 
-**Constraints that apply but are not yet quantified:**
-These are known to matter for this product, but no formal target has been set. Each should be established during technical design rather than assumed:
-- **Data residency / region** — PHI is expected to remain within an approved Azure region/geography. *Specific region constraint not yet documented.*
-- **Query latency** — users have an implicit tolerance ceiling for response time, particularly for complex multi-join questions. *No target defined.*
-- **Concurrent user scale** — affects Functions plan sizing and Azure OpenAI token/request quota. *Expected concurrency not defined.*
+### Target
 
-## Requirements by Feature Area
+React static frontend → standard ASP.NET Core API → explicit database, chat, embedding, storage, identity, audit, and denial-state providers. API replicas are stateless. An idempotent one-shot processor runs through a Kubernetes CronJob or equivalent scheduler. Configuration is typed and startup-validated; secrets are externally injected; identity is generic OIDC/JWT; logs are structured with OpenTelemetry; liveness, readiness, and startup health are distinct.
 
-### Natural Language Query & Data Access
+### Decisions
 
-#### REQ-001: Users can ask questions about a connected database in plain English and receive a natural-language answer plus the underlying data
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: LLM SQL generation is not deterministic — the same question has been observed to succeed on one attempt and fail on identical retries. Answer availability is therefore variable, not guaranteed.]**
-- AC-001-1: Given a user has selected a database connection, when they submit a plain-English question, then the system returns a natural-language answer and, where applicable, the underlying result rows.
-- AC-001-2: Given a question that matches no data in the connected database, when the query executes successfully but returns zero rows, then the user sees a clear "no matching records" message rather than an empty or broken response.
+1. **Host:** refactor toward ASP.NET Core; do not make Functions-on-Kubernetes the final target. Keeping Functions retains its runtime and `AzureWebJobsStorage` with little benefit for an HTTP/SSE API plus one timer.
+2. **Storage:** use domain/provider abstractions. Filesystem is the single-process local application-data provider; Azure Blob remains supported. Azurite is transitional, chiefly for the existing Functions host. MinIO/S3 may be added where deployment needs justify it, but is not the immediate local replacement.
+3. **Denial state:** use a separate time-window store, such as SQLite locally and Azure Table/Redis/relational storage elsewhere.
+4. **Database:** isolate connection, schema discovery, dialect guidance, validation, limits, and execution. MySQL is first; PostgreSQL follows the same contracts.
+5. **AI:** chat completion and text embeddings are two independently configurable services. They may use different providers, hosts, models, credentials, timeouts, and Colab runtime sessions. Colab-hosted endpoints are temporary development/test providers only.
+6. **Compliance:** controls are deployment-specific. Deployments processing PHI must meet applicable HIPAA safeguards, but SystemIQ itself is not healthcare-specific. Local/Colab data must be synthetic, de-identified, or explicitly approved.
 
-#### REQ-002: Users can select which database connection to query against
-- **Priority:** Must | **Complexity:** Low
-- AC-002-1: Given a user has access to one or more connections, when they open the connection selector, then only the connections their RBAC policy permits are listed (see REQ-008).
-- AC-002-2: Given a signed-in user has zero permitted connections under their access policy, when they open the application, then they see an explanatory empty state stating that no connections are available to them and indicating who to contact for access, with the chat input disabled rather than appearing usable.
+### Infrastructure-first delivery direction
 
-#### REQ-003: Responses stream incrementally rather than blocking until complete
-- **Priority:** Should | **Complexity:** Medium
-- **[RISK: If a stream breaks mid-answer, the user may be left with a partial or truncated response that reads as complete — potentially misleading for data-driven decisions.]**
-- AC-003-1: Given a question is being answered, when the AI generates the response, then chunks are displayed to the user as they arrive rather than only after the full answer is ready.
+Infrastructure portability is the first engineering workstream, but Kubernetes-compatible preparation and actual Kubernetes deployment are separate gates. From the beginning, the application must use portable hosting, external configuration, provider abstractions, container-compatible process behavior, and no mandatory Azure infrastructure. The final portable target remains React plus an ASP.NET Core API plus an idempotent one-shot worker; Azure Functions may remain only for temporary parity and migration verification.
 
-#### REQ-004: Chat history persists per user, per connection, so users can resume a prior session
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: Asynchronous loads racing against connection switches can show one connection's data under another. Two such stale-response defects have already been found and fixed; the pattern recurs wherever a per-connection fetch is added.]**
-- *(Added during adversarial review — Issue 1: gap identified between REQ-011's "fresh context after failure" behavior and the absence of any requirement establishing that history exists at all.)*
-- AC-004-1: Given a user has previously asked questions on a connection, when they return and re-select that connection, then their prior conversation (messages, not diagnostics) is restored.
-- AC-004-2: Given a user switches away from a connection before its history finishes loading, when the load resolves after the switch, then it does not overwrite the now-selected connection's state (stale-response protection).
+Actual Kubernetes deployment must not begin until the portable application starts successfully, uses local/non-Azure durable storage, connects to MySQL, exposes the required APIs, and passes the base local smoke path. Kubernetes is not a way to deploy the existing broken Azure Functions dependency graph. The target eliminates `AzureWebJobsStorage` as a mandatory runtime dependency.
 
-### Business Glossary & Curation
+### Approved temporary development inference topology
 
-#### REQ-005: The system maintains a curated business glossary mapping business vocabulary and synonyms to underlying schema (tables/columns), per connection
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: Generic auto-generated glossary terms can collide with curated ones, producing false ambiguity prompts or steering SQL to the wrong table. Observed in practice with `members`/`email` and with three separate entries all named `appointments`.]**
-- AC-005-1: Given a user's question contains wording matched in the glossary, when SQL is generated, then the matched business term's related tables/columns/join hints are included in the generation context.
-- AC-005-2: Given two glossary entries could both plausibly match a question's wording, when one entry's schema already covers the attribute in question (e.g., a specific table/column), then the system does not surface a redundant, unrelated entry as a competing match.
+```text
+SystemIQ
+  |
+  +--> Colab Chat Service
+  |      POST /v1/chat/completions
+  |
+  +--> Colab Embedding Service
+         POST /v1/embeddings
+```
 
-#### REQ-006: An authorized curator can browse, edit, and add glossary entries through an admin UI
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: The `DataIqGlossaryEditor` app role is not provisioned in Azure AD, so this requirement is unreachable by real users in production today despite being implemented. See Open External Dependencies & Blockers.]**
-- *(Depends on REQ-005.)*
-- AC-006-1: Given a curator opens the glossary editor for a connection, when they select a table with no existing curated entry, then the system shows an auto-generated default (business term, description, related tables/columns derived from the live schema) that they can edit and save.
-- AC-006-2: Given a curator is not assigned the `DataIqGlossaryEditor` role, when they attempt to access the glossary admin endpoints, then the request is denied (403).
-- **Role ownership:** The `DataIqGlossaryEditor` role is held by the developer/admin maintaining DataIQ initially, with planned handoff to a designated business owner once curation ownership is formally established.
-- **Implementation note:** This app role does not yet exist in Azure AD, so no user currently holds it in production. Until it is created and assigned, the glossary editor is reachable only via a local-development bypass and is effectively unavailable to real users.
+The services may run in separate Colab sessions or accounts. Each provider, base URL, model, credential/token, timeout, and applicable dimension/version setting is external configuration. Tunnel URLs and credentials must never be hard-coded or committed. Colab is not a production inference platform, and only synthetic, de-identified, or explicitly approved data may be sent to it.
 
-#### REQ-007: Negative feedback on an answer tied to a matched glossary term is queued for curator review, with the matched term(s) recorded for traceability
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: The feedback loop is only partially implemented today — the queue and inbox UI exist, but the term-to-table deep-link and full curator workflow are not complete.]**
-- *(Refined during adversarial review — Issue 2: added the requirement to record which glossary term(s) matched a turn, without which curator review has nothing concrete to act on.)*
-- AC-007-1: Given a user gives negative (thumbs-down) feedback on an answer that matched one or more glossary terms, when the feedback is processed, then a review item is created recording the question, the matched term(s), and the feedback reason/comment.
-- AC-007-2: Given a review item has been created, when a curator resolves it, then it no longer appears in the pending feedback inbox.
-- **Processing schedule:** The feedback-processing job runs on a **daily** schedule. Curation is not time-sensitive, so a daily cadence keeps noise and cost low; curators can additionally trigger processing on demand when they need results immediately. Feedback may therefore sit up to 24 hours before appearing in the inbox unless manually triggered.
+## Requirements
 
-### Security & Compliance
+### Query, glossary, and governance
 
-#### REQ-008: The system enforces role-based access control (RBAC) restricting which connections, tables, and columns a given user may query
-- **Priority:** Must | **Complexity:** High
-- **[RISK: Misconfiguration of the RBAC policy could expose PHI. This is the highest-stakes requirement in the PRD.]**
-- *(Refined during adversarial review — Issue 4: added AC-008-3 covering policy-change propagation timing.)*
-- AC-008-1: Given a user's RBAC policy denies a table, column, or connection, when they ask a question that would require that data, then the generated SQL is rejected before execution and the user receives a message that the data is not available under their access policy.
-- AC-008-2 (negative test): Given a user attempts to phrase a question to indirectly retrieve denied data (e.g., via a join path not explicitly blocked), when the generated SQL is validated, then it is still rejected if it references any denied table or column.
-- AC-008-3: Given a user's RBAC policy changes (e.g., a role is revoked) during an active session, when they submit their next request, then the updated policy applies immediately — no re-login or session invalidation is required.
+#### REQ-001 — Natural-language answer and actual data
+- **Must | High | Risk:** valid-looking model SQL may be semantically wrong.
+- AC-001-1: Given an authorized user selects a healthy configured connection, when a natural-language question is submitted, then SystemIQ retrieves grounded schema/glossary context, generates dialect-correct SQL, validates and executes it read-only, and returns actual rows plus an answer.
+- AC-001-2: Given a valid query returns no rows, when it completes, then a clear no-results response is returned.
+- AC-001-3: Given grounding, AI, validation, or execution fails, when SystemIQ responds, then it identifies the safe failure category without secrets or restricted schema.
 
-#### REQ-009: The system logs denied/blocked access attempts for audit purposes
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: The fail-closed behavior in AC-009-2 makes application availability dependent on the audit store — an audit-logging outage degrades the app rather than only degrading observability. This is a deliberate trade of availability for auditability under the HIPAA mandate.]**
-- AC-009-1: Given a query is rejected due to an RBAC violation or disallowed SQL pattern, when the rejection occurs, then an audit log entry is recorded including the user, the attempted question/SQL, the connection, and the timestamp.
-- AC-009-2: Given the audit log write itself fails, when a request would otherwise be processed, then the request is blocked (fail-closed) rather than proceeding unaudited — no access decision is made without a corresponding audit record.
-- **Retention:** Audit log retention follows **Progeny Health's existing audit/PHI retention policy** rather than a DataIQ-specific period, so this product inherits whatever the organization already mandates.
-- **Review ownership:** The **Security/Compliance team** is responsible for reviewing these logs.
-- **Assumption to verify:** This resolution assumes an organizational retention policy exists and explicitly covers application-level audit logs. If it does not, a DataIQ-specific period must be set — HIPAA §164.316(b)(2)(i) documentation retention (6 years) is the conventional fallback for PHI-adjacent audit trails.
+#### REQ-002 — Authorized provider-configured connections
+- **Must | Medium | Risk:** catalog/policy mistakes may expose or hide a connection.
+- AC-002-1: Given multiple providers are configured, when a user opens the selector, then only permitted non-secret connection metadata appears.
+- AC-002-2: Given no connection is permitted, when the app loads, then chat is disabled with an explanatory state.
+- AC-002-3: Given invalid configuration or an unresolved secret, when validation runs, then the connection is unavailable without exposing the secret.
+- AC-002-4: Given the local MySQL catalog and access policy are configured, when the real local application loads, then the permitted MySQL connection appears and can be selected without Azure identity or infrastructure.
 
-#### REQ-010: The system rate-limits a user who exceeds a defined number of access-denied responses within a rolling time window
-- **Priority:** Should | **Complexity:** High
-- **[RISK: The 5-denials-in-10-minutes default is an untuned starting point — too strict blocks legitimate users still learning their access boundaries, too loose doesn't deter probing. Mitigated by making both values configurable so they can be tuned from real usage data without a redeploy.]**
-- *(Narrowed during adversarial review — Issue 3: scoped from open-ended "suspicious pattern detection" to a concrete, measurable trigger.)*
-- AC-010-1: Given a user receives **5** access-denied responses within a rolling **10-minute** window, when the 5th denial occurs, then further requests from that user are rate-limited until the window elapses.
-- **Configurability:** Both the denial count (N = 5) and window duration (T = 10 minutes) are configuration values, changeable without redeployment.
+#### REQ-003 — Incremental streaming
+- **Should | Medium | Risk:** a broken stream can appear complete.
+- AC-003-1: Given chunks arrive, when answering, then the client displays them through the documented stream contract.
+- AC-003-2: Given the stream ends prematurely, when handled, then the answer is marked incomplete and not persisted as successful.
 
-### Reliability
+#### REQ-004 — Isolated durable chat history
+- **Must | Medium | Risk:** races or key defects can leak or lose history.
+- AC-004-1: Given prior successful messages, when that user reselects that connection, then the selected provider restores them.
+- AC-004-2: Given a connection switch precedes a read completion, when the stale read resolves, then it cannot overwrite current state.
+- AC-004-3: Given a failed turn, when later model context is built, then that failed output is excluded.
 
-#### REQ-011: Failed queries do not compound across retries — the AI-unavailable case shows a clear message, and a failed attempt is excluded from conversation context so the next attempt starts fresh
-- **Priority:** Must | **Complexity:** Low
-- AC-011-1: Given the AI service is unavailable or rate-limited, when a user submits a question, then they receive a clear message to wait and try again, rather than a silent failure or crash.
-- AC-011-2: Given a question previously failed (any recognized failure fallback message), when the user asks the same or a related question again, then the failed turn is excluded from the conversation context sent to the model, so the new attempt is not biased by the prior failure.
+#### REQ-005 — Configurable glossary per connection/domain
+- **Must | High | Risk:** stale or ambiguous mappings can select wrong objects.
+- AC-005-1: Given any supported domain, when curated, then business terms, synonyms, descriptions, table mappings, column mappings, relationship hints, and join guidance are editable per connection without code.
+- AC-005-2: Given the same term differs across connections, when queried, then only the selected connection's meaning is used.
+- AC-005-3: Given no curated entry, when grounding runs, then provider schema may be used but no healthcare/demo default is injected.
 
-## Non-Functional Requirements
+#### REQ-006 — Authorized glossary administration
+- **Must | Medium | Risk:** authorization or concurrent overwrite can damage grounding.
+- AC-006-1: Given a missing entry, when a curator selects a schema object, then an editable provider-derived default appears.
+- AC-006-2: Given no curator permission, when an admin endpoint is called, then it returns 403 and is audited.
+- AC-006-3: Given concurrent edits, when a version conflict occurs, then no silent overwrite happens.
 
-#### REQ-012: All PHI data access, storage, and transmission complies with HIPAA safeguards
-- **Priority:** Must | **Complexity:** High
-- **[RISK: Compliance is a hard mandate for this product; any gap here is a business-critical failure, not a quality issue.]**
-- AC-012-1: Given data is stored (chat history, glossary, feedback queue) or transmitted (client-server, server-database), when at rest or in transit, then it is encrypted using the organization's approved standards.
-- AC-012-2: Given a user accesses any data, when RBAC evaluates their request, then they receive only the minimum data necessary permitted by their policy (see REQ-008).
+#### REQ-007 — Traceable feedback review
+- **Must | Medium | Risk:** multi-step writes can duplicate or partially complete.
+- AC-007-1: Given negative feedback, when accepted, then a review records connection, matched terms, provider/model, database provider, and comment without secrets.
+- AC-007-2: Given processor retry, when repeated, then at most one active review exists per feedback ID.
+- AC-007-3: Given resolution succeeds, when the inbox reloads, then the item is absent and the resolution remains auditable.
 
-#### REQ-013: The system's answer accuracy is measurable via the existing feedback signal
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: Thumbs-up rate is a proxy, not ground truth — it reflects only answers users chose to rate. If participation is low or skewed (users more inclined to flag failures than successes), the measured rate may misrepresent real accuracy and mislead the target-setting in AC-013-2.]**
-- *(Resolved during adversarial review — Issue 5: tied an otherwise unmeasurable requirement to the existing thumbs-up/thumbs-down mechanism.)*
-- AC-013-1: Given users provide thumbs-up/thumbs-down feedback on answers, when accuracy is measured over a rolling period, then it is computed as the thumbs-up rate (or inverse thumbs-down rate) over that period.
-- AC-013-2: Given the system has been in use for a defined baseline period, when the baseline thumbs-up rate has been established and reported, then a numeric accuracy target is set from that baseline — no fixed target percentage is committed before baseline data exists.
-- **Measurement caveat:** The thumbs-up rate reflects only answers users actually rated. If feedback participation is low, the rate may not represent true accuracy across all questions asked, so feedback coverage should be reported alongside the rate.
+#### REQ-008 — Connection/table/column access policy
+- **Must | High | Risk:** policy, claim, or SQL-analysis defects can expose data.
+- AC-008-1: Given policy denies an object, when a question requires it, then execution is blocked.
+- AC-008-2: Given indirect access via join, subquery, alias, view, or dialect syntax, when validated, then denied objects remain blocked.
+- AC-008-3: Given policy changes, when the next request arrives, then current policy applies without redeployment.
 
-#### REQ-014: The system never executes data-modifying SQL against connected databases
-- **Priority:** Must | **Complexity:** Medium
-- **[RISK: Enforcement is pattern/validation-based rather than guaranteed by database permissions alone. A novel or obfuscated SQL form could in principle evade the validator, so defense-in-depth via read-only database credentials is strongly advisable.]**
-- AC-014-1: Given the AI generates a SQL statement, when it is validated before execution, then only read-only `SELECT` statements are permitted.
-- AC-014-2 (negative test): Given the AI generates SQL containing `INSERT`, `UPDATE`, `DELETE`, or any DDL statement, when validation runs, then execution is blocked and the user receives an error rather than the statement running.
+#### REQ-009 — Durable fail-closed denial audit
+- **Must | High | Risk:** a no-op local audit hides defects; fail-closed outages reduce availability.
+- AC-009-1: Given a denial, when it occurs, then identity, connection, request/SQL reference, reason, timestamp, and correlation ID are durably recorded.
+- AC-009-2: Given the mandatory audit write fails, when a request would proceed, then it is blocked.
+- AC-009-3: Given filesystem audit is selected, when restarted, then records remain and duplicate names cannot overwrite them.
+
+#### REQ-010 — Provider-neutral denial rate limiting
+- **Should | High | Risk:** inconsistent state weakens limits; strict thresholds block valid users.
+- AC-010-1: Given threshold denials occur in a rolling window, when another request arrives, then it is rate-limited as configured.
+- AC-010-2: Given local use without Azure Table, when restarted, then the local implementation preserves window behavior.
+
+#### REQ-011 — Failure isolation and bounded retries
+- **Must | Medium | Risk:** provider errors can leak detail or poison context.
+- AC-011-1: Given AI/embedding unavailability, when requested, then a safe degraded/retry response is returned.
+- AC-011-2: Given prior failure, when context is assembled, then failed output is not trusted context.
+- AC-011-3: Given bounded retries, when they occur, then SQL and successful turns are not duplicated.
+
+#### REQ-012 — Deployment-specific data protection
+- **Must | High | Risk:** regulated deployments may have inadequate controls or telemetry redaction.
+- AC-012-1: Given declared controls, when data is stored/transmitted, then provider configuration meets encryption, retention, residency, backup, and access requirements.
+- AC-012-2: Given prompts, SQL, rows, identity, or answers are processed, when telemetry emits, then credentials and protected data are redacted.
+- AC-012-3: Given local/Colab work, when data is prepared, then only synthetic, de-identified, or explicitly approved data is used.
+
+#### REQ-013 — Quality measured by provider and dialect
+- **Must | Medium | Risk:** self-selected feedback is not correctness ground truth.
+- AC-013-1: Given feedback exists, when reported, then participation and database/dialect/provider/model dimensions accompany the rating.
+- AC-013-2: Given a representative baseline, when targets are approved, then dataset, target, cadence, and regression threshold are recorded.
+
+#### REQ-014 — Cross-dialect read-only enforcement
+- **Must | High | Risk:** regex-only validation can miss provider-specific mutation.
+- AC-014-1: Given SQL for any provider, when validated, then only its allowed read-only form proceeds.
+- AC-014-2: Given `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `TRUNCATE`, multiple statements, provider-specific mutation, or an unsafe procedure/execution path, when validated, then it is blocked and audited.
+- AC-014-3: Given application validation fails, when mutation reaches the database, then the database identity lacks permission.
+- AC-014-4: Given generated SQL, when safety validation runs, then dialect-aware parsing plus application policy, row limits, and execution timeout are enforced and regex is never the sole control.
+
+### Local development and provider portability
+
+#### REQ-015 — Azure-independent local profile
+- **Must | High | Risk:** startup may look healthy while a request path still reaches Azure.
+- AC-015-1: Given no Azure login/subscription, when the local profile starts, then frontend, backend, storage, denial state, MySQL, and AI are usable without an Azure Storage account.
+- AC-015-2: Given J1 runs, when complete, then actual MySQL rows return with no requirement for an Azure subscription, Azure login, Azure Storage/Blob/Table, Key Vault, Azure SQL, Azure OpenAI, or Entra ID.
+- AC-015-3: Given missing local configuration/dependency, when readiness runs, then an actionable redacted error appears before user traffic.
+- AC-015-4: Given the documented local profile, when its smoke path runs, then the real frontend and backend complete the path; canned, static, or demo-endpoint answers do not satisfy it.
+
+#### REQ-016 — Storage-provider abstraction
+- **Must | High | Risk:** atomicity/concurrency differences can corrupt history, glossary, feedback, or audit.
+- AC-016-1: Given `FileSystem` in single-process local mode, when domain storage runs, then safe keys and atomic writes persist data under a restricted configured root.
+- AC-016-2: Given `AzureBlob`, when the same operations run, then Blob remains supported without Azure types in domain contracts.
+- AC-016-3: Given conformance tests, when not-found, overwrite, conflict, prefix list, delete, malformed data, cancellation, and outage run, then documented outcomes match.
+- AC-016-4: Given multiple replicas/Kubernetes, when pod-local filesystem is configured as durable storage, then validation rejects it.
+- AC-016-5: Given a storage provider is selected, when chat history, glossary, feedback, audit, or persisted RAG/index state is accessed, then each uses the provider abstraction; Azurite is optional transitional compatibility tooling and MinIO is not required.
+
+#### REQ-017 — Database capability/provider architecture
+- **Must | High | Risk:** lowest-common-denominator design can hide unsafe capability gaps.
+- AC-017-1: Given a provider catalog entry, when used, then connection handling, schema discovery, SQL dialect, validation, execution, limits, and provider capabilities use its registered boundaries.
+- AC-017-2: Given a future relational provider implements contracts/tests, when registered, then chat, glossary, policy, and storage need no redesign.
+- AC-017-3: Given a required capability is absent, when validated, then the connection is rejected rather than using SQL Server behavior.
+
+#### REQ-018 — MySQL first-class support
+- **Must | High | Risk:** version/mode/quoting/date/metadata differences affect correctness.
+- AC-018-1: Given a configurable MySQL connection and least-privilege read-only credentials, when schema discovery runs, then tables, columns, primary keys, foreign keys, and relationships are returned without SQL Server/Azure SQL fallback logic.
+- AC-018-2: Given representative natural-language questions, when SQL is generated, then MySQL dialect, identifier quoting, date/function guidance, joins, and query limits are applied and actual MySQL rows are returned.
+- AC-018-3: Given mutation or a row/time-limit violation, when validation/execution runs, then the query is blocked or bounded and the outcome is auditable.
+- AC-018-4: Given a MySQL query is cancelled or exceeds its configured timeout, when execution stops, then cancellation propagates safely and the connection remains usable.
+
+#### REQ-019 — Additive PostgreSQL support
+- **Should | High | Risk:** source PostgreSQL may be confused with a future internal-state database.
+- AC-019-1: Given the provider seams, when PostgreSQL is added, then its schema, quoting, limits, functions, validation, and execution use the same boundaries.
+- AC-019-2: Given PostgreSQL is both source and internal state, when configured, then connections, privileges, lifecycle, and health are separate.
+
+#### REQ-020 — Configurable chat-completion provider
+- **Must | High | Risk:** models differ in context, streaming, safety, accuracy, latency, and cost.
+- AC-020-1: Given a chat provider, when starting, then provider, base URL, model/deployment, credential/auth mode, timeout, and limits are independently configured and validated without hard-coded Azure or Colab values.
+- AC-020-2: Given Azure OpenAI, when selected, then its adapter and approved credential flow remain supported.
+- AC-020-3: Given the development baseline, when the configured temporary Colab/OpenAI-compatible service is selected, then SystemIQ calls `POST /v1/chat/completions` without requiring Azure and classifies the endpoint as non-production.
+- AC-020-4: Given provider/model change, when evaluation misses safety/accuracy thresholds, then it cannot be promoted.
+- AC-020-5: Given chat and embedding services use different URLs, models, tokens, or Colab sessions/accounts, when a question is processed, then each service uses only its own configuration and credential.
+
+#### REQ-021 — Independent embedding/RAG provider
+- **Must | High | Risk:** dimension/model/index mismatch silently harms grounding.
+- AC-021-1: Given an embedding provider, when indexing/retrieving, then provider, base URL, model, credential/token, dimensions, timeout, and index/model/content versions are configuration-driven and not embedded in domain logic.
+- AC-021-2: Given the approved development baseline, when embeddings are requested, then the configurable Google Colab/OpenAI-compatible endpoint exposes `POST /v1/embeddings` using `Qwen/Qwen3-Embedding-8B`; another configured provider/model can replace it later without redesign.
+- AC-021-3: Given chat and embeddings differ, when processing, then separate providers, hosts, models, credentials, and Colab runtime sessions work without a shared Azure account.
+- AC-021-4: Given a natural-language question, when RAG runs, then it embeds the question; searches connection-specific schema/glossary embeddings; retrieves relevant tables, columns, relationships/join hints, business terms, and synonyms; filters results by selected connection and authorization policy; and grounds the chat model for dialect-correct SQL generation.
+- AC-021-5: Given index content is stored, when inspected, then metadata records connection, source type, schema version/hash, glossary version, embedding model, embedding dimension, and content/index version.
+- AC-021-6: Given the embedding model, dimension, schema, glossary, or indexed content becomes incompatible, when retrieval is requested, then the stale index is identified and re-indexing is required/reported; any configured lexical degradation is explicit.
+
+#### REQ-022 — Typed configuration and secret hygiene
+- **Must | High | Risk:** raw JSON/connection strings can leak or fail late.
+- AC-022-1: Given startup, when binding storage provider, database provider/connections, catalog, policy, chat provider/URL/model, embedding provider/URL/model/dimensions, authentication, deployment mode, health, audit, schedule, and telemetry, then combinations are typed and validated before readiness.
+- AC-022-2: Given credentials, API keys, tokens, passwords, or connection strings, when supplied, then they come from environment/configuration secret sources or a secret manager—not source, PRD examples, images, Kubernetes manifests, logs, or frontend configuration.
+- AC-022-3: Given Kubernetes/container deployment, when secrets are delivered, then mounted/injected secrets work independently of Key Vault while Key Vault remains optional.
+- AC-022-4: Given diagnostics, when configuration is reported, then secrets are redacted and errors actionable.
+- AC-022-5: Given temporary Colab chat or embedding inference, when endpoint URLs or tokens change, then operators update external configuration independently without rebuilding the application or committing tunnel URLs/credentials.
+
+#### REQ-023 — Container/Kubernetes-compatible runtime target
+- **Must | High | Risk:** host conversion may change routes, SSE, auth, audit, or duplicate timers.
+- AC-023-1: Given ASP.NET Core contract tests, when compared to approved Functions behavior, then routes, codes, SSE, cancellation, auth, and fail-closed audit are equivalent.
+- AC-023-2: Given one-shot/CronJob feedback processing, when duplicate starts occur, then idempotency prevents duplicate active reviews.
+- AC-023-3: Given API containers, when probes run, then liveness tests process health; readiness validates configuration/state without restart storms during external AI/source-DB outages.
+- AC-023-4: Given telemetry, when emitted, then it is correlated, provider-neutral, and redacted; Application Insights is optional.
+- AC-023-5: Given multiple replicas, when serving, then no durable state uses pod-local storage and concurrency budgets protect DB/AI providers.
+- AC-023-6: Given Kubernetes deployment is proposed, when the delivery gate is evaluated, then the portable ASP.NET Core application must already start, use non-Azure/local storage, connect to MySQL, expose required APIs, and pass the base local smoke path before container/Kubernetes configuration, secret injection, persistent external state, CronJob scheduling, probes, networking, graceful shutdown, and scaling are accepted.
 
 ## Acceptance Criteria Summary
 
-| REQ | Description | Priority | Complexity | Risk | AC Count |
-|---|---|---|---|---|---|
-| REQ-001 | Ask questions in plain English | Must | Medium | ⚠ | 2 |
-| REQ-002 | Select database connection | Must | Low | — | 2 |
-| REQ-003 | Streaming responses | Should | Medium | ⚠ | 1 |
-| REQ-004 | Chat history persistence | Must | Medium | ⚠ | 2 |
-| REQ-005 | Curated business glossary | Must | Medium | ⚠ | 2 |
-| REQ-006 | Glossary admin editor | Must | Medium | ⚠ | 2 |
-| REQ-007 | Feedback-driven review queue | Must | Medium | ⚠ | 2 |
-| REQ-008 | RBAC enforcement | Must | High | ⚠ | 3 |
-| REQ-009 | Audit logging of denied access | Must | Medium | ⚠ | 2 |
-| REQ-010 | Rate-limit suspicious access patterns | Should | High | ⚠ | 1 |
-| REQ-011 | Failure recovery / resilience | Must | Low | — | 2 |
-| REQ-012 | HIPAA/PHI compliance | Must | High | ⚠ | 2 |
-| REQ-013 | Accuracy measurement | Must | Medium | ⚠ | 2 |
-| REQ-014 | Read-only enforcement | Must | Medium | ⚠ | 2 |
+| REQ | ACs | REQ | ACs | REQ | ACs |
+|---|---:|---|---:|---|---:|
+| 001 | 3 | 009 | 3 | 017 | 3 |
+| 002 | 4 | 010 | 2 | 018 | 4 |
+| 003 | 2 | 011 | 3 | 019 | 2 |
+| 004 | 3 | 012 | 3 | 020 | 5 |
+| 005 | 3 | 013 | 2 | 021 | 6 |
+| 006 | 3 | 014 | 4 | 022 | 5 |
+| 007 | 3 | 015 | 4 | 023 | 6 |
+| 008 | 3 | 016 | 5 | **Total** | **81** |
 
-**Totals:** 27 ACs across 14 requirements. All 12 Must requirements have ≥2 ACs. Both Should requirements have ≥1 AC. Risk flags on all 12 Medium/High complexity requirements; the 2 Low-complexity requirements (REQ-002, REQ-011) are unflagged by design.
+All 23 requirements have acceptance criteria; all 20 Must requirements have at least two. Total acceptance criteria: 81.
 
 ## Dependency Map
 
-| REQ | Depends On | Notes |
-|---|---|---|
-| REQ-001 | REQ-002, REQ-005 | Needs a selected connection and glossary context to generate good SQL |
-| REQ-002 | REQ-008 | Connection list itself must be RBAC-filtered |
-| REQ-003 | REQ-001 | Streaming applies to the query-answering flow |
-| REQ-004 | REQ-001 | History persistence wraps the Q&A flow |
-| REQ-006 | REQ-005 | Editor operates on the glossary structure |
-| REQ-007 | REQ-005, REQ-006 | Feedback loop deep-links into curated entries |
-| REQ-009 | REQ-008 | Audit logging captures RBAC denials |
-| REQ-010 | REQ-009 | Rate-limiting trigger is defined off audit/denial data |
-| REQ-011 | REQ-001 | Failure recovery applies to the query-answering flow |
-| REQ-013 | REQ-001 | Accuracy is measured from feedback on Q&A turns |
+| Requirement | Depends on |
+|---|---|
+| 001 | 002, 005, 008, 014, 017, 020, 021 |
+| 002 | 008, 017, 022 |
+| 003 | 001, 020 |
+| 004 | 001, 016 |
+| 005 | 016, 017, 021 |
+| 006 | 005, 008 |
+| 007 | 004, 005, 006, 016, 023 |
+| 008 | 002, 017, 022 |
+| 009 | 008, 016 |
+| 010 | 009, 016 |
+| 011 | 001, 020, 021 |
+| 012 | 016, 017, 020, 021, 022, 023 |
+| 013 | 001, 007, 017, 020, 021 |
+| 014 | 008, 009, 017 |
+| 015 | 016, 018, 020, 021, 022, 023 |
+| 016 | 022 |
+| 018 | 017, 022 |
+| 019 | 017, 022 |
+| 020 | 022 |
+| 021 | 005, 022 |
+| 023 | 016, 022 |
 
-No circular dependencies identified.
+No circular dependency is identified. Local critical path: REQ-022 → 016/017/020/021/023 → 018 → 015 → 001.
 
-## Rollout and Product Observability
+## Delivery Gates
 
-1. **Pre-production validation:** Resolve B-1 and B-3; confirm B-2; verify that every pilot user sees only permitted connections and that database credentials are read-only.
-2. **Controlled pilot:** Enable a representative group from the target persona. Collect question volume, rated-answer feedback, feedback participation, denied-attempt counts, failure categories, and curator-queue age.
-3. **Baseline review:** After the first complete 30-day pilot period, review SC-1 through SC-5 with the product owner, Security/Compliance, and the glossary owner. Approve numeric targets for metrics that intentionally require a baseline.
-4. **Expansion decision:** Expand beyond the pilot only if SC-3 and SC-5 meet their initial decision rules, no unresolved high-severity privacy or access-control finding exists, and owners accept targets and remediation plans for the remaining criteria.
-5. **Ongoing review:** Report success metrics by connection and user cohort where permitted, without exposing PHI in telemetry. Track AI unavailability, SQL validation rejection, SQL execution failure, zero-result, and user-cancelled outcomes separately so a single aggregate error rate does not obscure causes.
+### P0 — portable infrastructure foundation and working local application
 
-This section defines product signals and release decisions. Infrastructure dashboards, alert thresholds, deployment mechanics, and runbooks remain outside this PRD and belong in the TRD and operational assets.
+Remove mandatory Azure infrastructure dependencies; establish portable hosting/configuration, filesystem durable storage, SQLite denial-window state, provider-neutral database seams, MySQL connectivity and schema discovery, local catalog/policy/glossary, and a working frontend/backend with the base NL-to-SQL smoke path. Azurite may be used only for transitional Functions compatibility testing. The real application—not a canned demo endpoint—must start and exercise the smoke path before Kubernetes deployment work begins.
 
-## Source-Grounding Notes
+### P1 — complete local AI/RAG integration
 
-- The current `.sln`, `src/PH-DataIQ.Functions`, `client/`, `infra/main.bicep`, and `azure-pipelines.yml` establish Azure Functions plus React/Static Web Apps as the active architecture.
-- The root README still describes the retired Blazor/console shape. Treat it as stale documentation for architecture decisions until it is reconciled; do not use it to override the current project structure.
-- Requirements describing existing behavior are not evidence that the behavior is production-ready. The blockers below remain authoritative.
+Complete the independently configured OpenAI-compatible chat-completion and embedding integrations, use the Qwen3 embedding development baseline, build and version the connection-specific schema/glossary index, enforce authorization-filtered RAG, generate dialect-correct MySQL SQL, validate and execute it read-only, and return actual MySQL rows. Capture API/security parity and advance the ASP.NET Core API plus one-shot-worker migration sufficiently to prove the portable local path.
 
-## Readiness Scorecard
+### P2 — Kubernetes deployment and production portability
 
-| Dimension | Score | v1.0.1 | v1.0.0 | Rationale |
-|---|---|---|---|---|
-| Completeness | 5/5 | 4/5 | 4/5 | Improved. All feature areas covered; the deployment/ops exclusion now carries an explicit rationale and tracking home rather than a bare non-goal line; a Technical Constraints & Dependencies section documents the fixed stack, the HIPAA mandate, and the three constraints that apply but remain unquantified. |
-| Testability | 5/5 | 4.5/5 | 4/5 | Improved. Every Must requirement now has ≥2 ACs including an edge case; the previously single-AC Musts (REQ-002, REQ-009) gained meaningful negative/edge criteria rather than filler. |
-| Clarity | 5/5 | 5/5 | 4/5 | Maintained. No unresolved ambiguity markers; risk flags now make previously-implicit fragility explicit, reducing the chance two readers assume different reliability characteristics. |
-| Feasibility | 4.5/5 | 5/5 | 5/5 | **Declined.** Not because the product got harder, but because this pass documented two real external blockers (unprovisioned Azure AD role, unverified retention policy) and eight concrete risks. Feasibility is no longer a clean 5 because REQ-006 is provably unreachable in production today and REQ-009's retention basis is unconfirmed. This is more accurate, not worse. |
-| **Overall** | **4.88** | **4.63** | **4.25** | **PASS (improved +0.25)** |
+Containerize and deploy the proven React frontend, ASP.NET Core API, and idempotent one-shot processor/CronJob with external configuration, injected secrets, persistent external state, probes, networking/Gateway/SSE behavior, graceful shutdown, backup/recovery, concurrency budgets, and scaling controls. Pod-local filesystem is not durable state for multi-replica deployments. PostgreSQL is the next provider/extensibility proof after MySQL; S3/MinIO is added only if a future deployment needs it.
 
-**Note on the Feasibility decline:** the drop from 5.0 to 4.5 is deliberate and reflects better information, not regression. v1.0.0–1.0.1 scored Feasibility as a clean 5 on the basis that most requirements were already implemented. That was true but incomplete: "implemented" is not the same as "reachable by users," and REQ-006 is a concrete case where working code sits behind an unprovisioned role. Documenting that lowered the score while raising the document's accuracy.
+## First Demonstrable Working Milestone
 
-## Open External Dependencies & Blockers
+The first stakeholder demonstration is complete only when the real application performs this sequence without mandatory Azure infrastructure:
 
-These items are outside the product's own codebase but block or qualify requirements in it. None can be resolved by further PRD refinement — each requires an action or confirmation by a named party.
+1. The application starts successfully and the frontend communicates with the backend.
+2. A configured MySQL connection is visible and selectable.
+3. SystemIQ discovers its tables, columns, primary keys, foreign keys, and relationships.
+4. Chat and embedding providers are configured independently.
+5. A user asks a simple natural-language question.
+6. The query is embedded and relevant authorized schema/glossary context is retrieved.
+7. The chat service generates valid MySQL `SELECT` SQL from that context.
+8. Dialect-aware safety and access-policy validation succeeds.
+9. SQL executes through a least-privilege read-only MySQL account with limits and cancellation.
+10. Actual database rows and the grounded natural-language answer are returned.
 
-| # | Blocker | Blocks | Owner | Status | Impact if unresolved |
-|---|---|---|---|---|---|
-| B-1 | The `DataIqGlossaryEditor` app role does not exist in Azure AD and is assigned to no one | REQ-006 (and therefore the curation half of REQ-007) | Azure AD administrator | Open | Glossary editor is unreachable in production. Implemented and working, but no real user can access it — currently only reachable via a local-development bypass. |
-| B-2 | Progeny Health's organizational audit/PHI retention policy is unverified — existence and applicability to application-level audit logs not confirmed | REQ-009 retention basis | Security/Compliance team | Open | REQ-009's retention requirement has no confirmed authority behind it. If no such policy covers application logs, a DataIQ-specific period must be set (HIPAA §164.316(b)(2)(i) 6-year documentation retention is the conventional fallback). |
-| B-3 | Production Function App requires a Key Vault `Key Vault Secrets User` role assignment for its managed identity | Entire product in production | Owner / User Access Administrator on `rg-SankalpAIPOC` | Open | The deployed backend cannot read its secrets and has been crash-looping since first deployment. Every requirement in this PRD is unverifiable in production until resolved. Remediation script exists at `infra/grant-deployment-permissions.ps1`. |
+Static, canned, or demo-only answers do not satisfy this milestone.
 
-## Clarification Decisions (resolved in v1.0.1)
+## Risks and Dependencies
 
-All five `[NEEDS CLARIFICATION]` markers from v1.0.0 are now resolved:
+| ID | Risk / mitigation |
+|---|---|
+| R-01 Critical | Auth/audit regression during refactor → host-independent contract and failure-injection tests |
+| R-02 Critical | Unsafe/wrong cross-dialect SQL → parser/validator, DB read-only roles, limits, evaluation sets |
+| R-03 Critical | State migration loss/duplication → versioned migration, checksums, concurrency, rollback |
+| R-04 Critical | Dev bypass in production → environment guardrails and deployment tests |
+| R-05 Critical | Secret/data leakage → secret references, redaction tests, scanning, least privilege |
+| R-06 High | Transport parity mistaken for model quality → promotion thresholds per model/dialect |
+| R-07 High | Embedding/index incompatibility → persist model/dimension/content version and re-index |
+| R-08 High | Filesystem used with replicas → capability validation rejects it |
+| R-09 High | Duplicate background work → atomic claims, idempotency, overlap prevention |
+| R-10 High | Kubernetes cost exceeds value → platform-ownership gate and proof first |
+| R-11 High | SSE/proxy/rollout failure → real-controller tests and drain settings |
+| R-12 High | Scaling overwhelms DB/AI → pooling, budgets, backpressure, saturation metrics |
+| R-13 High | Colab instability/data exposure → non-production, synthetic data, artifact handoff |
 
-| # | REQ | Question | Decision |
+| ID | Status | Baselined decision / remaining input | Gate |
 |---|---|---|---|
-| 1 | REQ-006 | Who holds the glossary-curator role? | Developer/admin maintaining DataIQ initially, with planned handoff to a designated business owner. Role does not yet exist in Azure AD. |
-| 2 | REQ-007 | Feedback-processing job interval? | Daily, with on-demand manual trigger available. |
-| 3 | REQ-009 | Audit log retention and reviewer? | Retention defers to Progeny Health's existing audit/PHI retention policy; Security/Compliance team reviews. Assumes such a policy exists and covers application audit logs. |
-| 4 | REQ-010 | Rate-limit N and T values? | N = 5 denials, T = 10-minute rolling window; both configurable without redeployment. |
-| 5 | REQ-013 | Target accuracy percentage? | No fixed target committed yet — establish a measured baseline first, then set the target from it. |
+| D-01 | **BASELINED FOR IMPLEMENTATION** | MySQL is the first local provider. Supported local version, synthetic test schema/data, connection details, and least-privilege read-only credentials remain environment configuration unless implementation evidence establishes them. | P0/SC-1 |
+| D-02 | **BASELINED FOR IMPLEMENTATION; exact model ID EXTERNAL/PENDING** | Development chat uses a temporary Google Colab OpenAI-compatible `POST /v1/chat/completions` endpoint with an independently configurable model. The exact Qwen chat model ID awaits stakeholder/repository evidence but does not block the provider contract. | P0/P1 |
+| D-03 | **BASELINED FOR IMPLEMENTATION** | The embedding-model/provider decision is closed: `Qwen/Qwen3-Embedding-8B` through a configurable Colab/OpenAI-compatible `POST /v1/embeddings` endpoint. Vector/index parameters and evaluation evidence remain implementation outputs. | P1 |
+| D-04 | **CLOSED (product decision)** | Filesystem is the local durable application-storage baseline; SQLite is the local denial-window-state baseline. Lifecycle details are implementation/configuration concerns. | P0 |
+| D-05 | **BASELINED FOR IMPLEMENTATION** | Generic connection catalog and access policy remain configuration-driven and must be implemented and tested for the local MySQL connection. | P0 |
+| D-06 | **BASELINED FOR IMPLEMENTATION** | Target host is ASP.NET Core API plus one-shot worker. Azure Functions remains temporary only for contract parity/migration; cutover/rollback details belong in the implementation plan. | P0/P1 |
+| D-07 | **EXTERNAL/PENDING** | Kubernetes platform ownership and standards are required only before P2 deployment. | P2 only |
+| D-08 | **EXTERNAL/PENDING** | Per-deployment compliance, retention, residency, backup, and review ownership are required before production use. | Production only |
+| D-09 | **EXTERNAL/PENDING** | PostgreSQL versions, priority, and evaluation data are selected after the MySQL baseline. | After MySQL/P2 |
+| D-10 | **EXTERNAL/PENDING** | Colab access and artifact-handoff rules are required when that approved temporary development path is used. Only synthetic, de-identified, or explicitly approved data is permitted. | Colab use only |
+
+## Implementation Gaps and Blocker Status
+
+There are no unresolved product-decision blockers for TRD synchronization or implementation planning. The following are prioritized implementation gaps, not reasons to keep the PRD in Draft:
+
+1. Build the complete real-backend local MySQL NL-to-SQL path.
+2. Decouple Blob/Table and Functions-host storage concerns; retain Azurite only for transitional compatibility.
+3. Replace SQL Server-specific discovery, dialect, validation, and execution behavior with provider boundaries and first-class MySQL support.
+4. Implement independent chat and embedding registrations plus complete RAG.
+5. Supply a working local MySQL catalog, access policy, and connection-specific generic glossary.
+6. Consolidate typed configuration, secret injection, validation, and redaction.
+7. Add dialect-aware parsing, policy validation, limits, timeout, cancellation, and read-only database credentials.
+8. Stage the ASP.NET Core API and one-shot-worker extraction with Functions parity verification.
+9. Make feedback processing portable and idempotent.
+10. Complete generic authentication, health, telemetry, graceful shutdown, networking, and scaling boundaries before P2.
+
+The exact chat model ID (D-02) remains a genuine external confirmation item, but it does not block implementation of the independently configurable chat-provider architecture. D-07 and D-08 block only Kubernetes/production promotion, not P0/P1 implementation.
+
+## Ensemble Refinement Findings
+
+The stakeholder request explicitly selected and resolved all findings, so no additional interview was necessary.
+
+| # | Baseline finding | v1.0.3 disposition |
+|---:|---|---|
+| 1 | Product tied to Clinical Operations/named healthcare DBs | Domain-neutral SystemIQ; demos are configuration only |
+| 2 | Azure services described as fixed | Current and optional-provider target separated |
+| 3 | No Azure-independent end-to-end criterion | J1, SC-1, REQ-015, P0 |
+| 4 | No local storage/provider contract | REQ-016; filesystem + Azure Blob; denial state separate |
+| 5 | SQL Server-only despite MySQL/PostgreSQL direction | REQ-017–019 |
+| 6 | Azure OpenAI-only; unused embedding config | REQ-020–021 |
+| 7 | Colab role/risks undefined | Development-only with data and handoff rules |
+| 8 | No explicit no-hardcoded-secret/startup validation | REQ-022 |
+| 9 | PRD contradicted Kubernetes host recommendation | ASP.NET Core/CronJob target in REQ-023 |
+| 10 | HIPAA wording made product healthcare-specific | Deployment-specific controls retained |
+
+## Ensemble PRD Readiness Review
+
+**Baseline:** v1.0.3, 23 requirements, 71 ACs, 4.75/5. The generic direction was established, but delivery sequencing, independent development AI baselines, RAG details, and D-01 through D-06 dispositions were not sufficiently resolved for implementation approval.
+
+| Dimension | Score | Rationale |
+|---|---:|---|
+| Completeness | 5.00 | Generic NL-to-SQL, Azure-independent local operation, storage, MySQL-first extensibility, independent AI services, complete RAG, safety, portable host, Kubernetes gates, risks, and dependencies are covered |
+| Testability | 5.00 | All 23 requirements have Given/When/Then criteria, including the real MySQL/RAG milestone and explicit P0/P1/P2 gates |
+| Clarity | 5.00 | Provider responsibilities, Colab development topology, Qwen embedding baseline, delivery sequence, and dependency dispositions are explicit |
+| Feasibility | 4.50 | Product choices are achievable and implementation-ready; the work remains substantial and the exact chat model ID plus later platform/production inputs remain external |
+| **Overall** | **4.88 PASS** | Implementation Ready; ready for TRD synchronization and P0/P1 implementation |
+
+D-01 through D-06 are now closed or baselined for implementation. No remaining product decision blocks TRD synchronization or P0/P1 implementation. The exact chat model ID remains pending stakeholder confirmation but is configuration, not an architectural blocker. Kubernetes/production promotion remains correctly gated by P0/P1 evidence and D-07/D-08.
 
 ## Changelog
 
-### v1.0.0 — 2026-07-29
-
-Codex `create-prd` decision-ready deliverable grounded in the supplied reference PRD and current repository.
-
-- Added four key user journeys covering permitted queries, history restoration, restricted data, and glossary curation.
-- Added five measurable product success criteria and explicit goal-to-requirement-to-outcome traceability.
-- Added a controlled rollout and product-observability plan with baseline and expansion decisions.
-- Added source-grounding notes distinguishing the active React/Azure Functions implementation from the stale root README.
-- Corrected the dependency summary from 10 dependencies to 10 dependent requirements comprising 12 dependency edges.
-- Product scope and the 14 existing requirements remain unchanged.
-
-### v1.0.1 — 2026-07-29
-
-Refinement pass scoped to the five `[NEEDS CLARIFICATION]` markers (findings 1–5). Findings 6–8 were reviewed and deliberately deferred by the document owner.
-
-- **REQ-006:** Resolved curator-role ownership (developer/admin initially, handoff planned). Added an implementation note recording that the `DataIqGlossaryEditor` app role does not yet exist in Azure AD, so the glossary editor is not currently reachable by real users in production.
-- **REQ-007:** Set the feedback-processing schedule to daily (changed from the 15-minute interval currently implemented), noting the on-demand manual trigger and the resulting up-to-24h inbox latency.
-- **REQ-009:** Resolved audit log retention (defers to organizational policy) and review ownership (Security/Compliance team). Added an explicit assumption-to-verify that an organizational policy exists and covers application audit logs, with the HIPAA 6-year documentation-retention fallback noted.
-- **REQ-010:** Replaced abstract N/T placeholders with concrete values (5 denials / 10-minute rolling window) and made both configurable. Updated the existing risk flag to reflect that configurability mitigates the tuning risk.
-- **REQ-013:** Resolved the accuracy target as baseline-first rather than a committed percentage. Added AC-013-2 encoding the baseline-then-target behavior, plus a measurement caveat that thumbs-up rate covers only rated answers and should be reported alongside feedback coverage. *(Note: this incidentally raised REQ-013's AC count from 1 to 2, partially overlapping deferred finding 6 — the new AC was added because it encodes the decision itself, not to pad AC counts.)*
-- **Metadata:** Version 1.0.0 → 1.0.1; Readiness Score 4.25 → 4.63; ambiguity markers 5 → 0; total ACs 24 → 25.
-
-### v1.0.2 — 2026-07-29
-
-Refinement pass addressing all six findings — the three carried over from v1.0.1 plus three newly identified.
-
-- **REQ-002 (finding 1):** Added AC-002-2 covering the zero-permitted-connections case — explanatory empty state naming who to contact, with chat input disabled rather than appearing usable.
-- **REQ-009 (finding 1):** Added AC-009-2 establishing **fail-closed** behavior — if the audit log write fails, the request is blocked rather than proceeding unaudited. Added a corresponding risk flag noting this deliberately trades availability for auditability.
-- **Risk indicators (finding 2):** Added risk flags to all 8 previously-untagged Medium-complexity requirements (REQ-001, 003, 004, 005, 006, 009, 013, 014). Every flag describes behavior actually observed in this codebase — non-deterministic SQL generation, stream truncation, connection-switch race conditions, glossary term collisions, the unprovisioned editor role, the fail-closed availability trade, thumbs-up-rate proxy bias, and pattern-based read-only enforcement. Risk coverage now spans all 12 Medium/High requirements.
-- **Deployment/ops scope (finding 3):** Replaced the bare non-goal line with an explicit rationale (product-behavior scope at LIGHT depth), a tracking home (`infra/` assets and the Azure DevOps pipeline), and a pointer to the known production blocker.
-- **Technical Constraints & Dependencies (finding 4):** Added a new section documenting the fixed platform/stack, the HIPAA hard mandate, and three constraints that apply but are deliberately left unquantified (data residency, query latency, concurrent scale) as a checklist for technical design.
-- **Open External Dependencies & Blockers (finding 5):** Added a new section tracking three blockers with owner, status, and impact — the unprovisioned `DataIqGlossaryEditor` role (B-1), the unverified organizational retention policy (B-2), and the Key Vault permission grant blocking all of production (B-3, newly surfaced during this pass).
-- **Stale meta-section (finding 6):** Removed the "Path to a higher score" section, which referenced findings now addressed.
-- **Metadata:** Version 1.0.1 → 1.0.2; Readiness Score 4.63 → 4.88; total ACs 25 → 27; risk flags 4 → 12; AC summary table gained a Risk column and totals row.
-- **Scoring note:** Feasibility was *lowered* 5.0 → 4.5 in this pass. This reflects newly documented blockers rather than any regression in the product — see the note under the Readiness Scorecard.
+- **v1.0.0 (2026-07-29):** initial DataIQ clinical/Azure PRD with 14 requirements.
+- **v1.0.1 (2026-07-29):** resolved curator, schedule, audit-retention, rate-limit, and accuracy clarifications.
+- **v1.0.2 (2026-07-29):** expanded edge cases, risks, constraints, blockers, and observability.
+- **v1.0.3 (2026-08-27):** Ensemble refinement using the local-infrastructure and Kubernetes analyses. Repositioned the product as generic SystemIQ; generalized REQ-001–014; added REQ-015–023 for local portability, storage, database providers, MySQL, PostgreSQL, chat, embeddings/RAG, secrets/configuration, and ASP.NET Core/Kubernetes compatibility; added delivery gates, risks, dependencies, blockers, and readiness review. Scale depth increased from LIGHT to MEDIUM. Readiness is 4.75 because required provider and host capabilities are not implemented.
+- **v1.0.4 (2026-08-28):** targeted stakeholder refinement preserving all 23 requirements. Made infrastructure portability the first workstream while gating actual Kubernetes deployment behind a working portable local application; strengthened Azure-independent local execution, filesystem/SQLite baselines, MySQL-first provider behavior, independent Colab chat/embedding services, `Qwen/Qwen3-Embedding-8B`, complete connection/policy-scoped RAG, generic glossary, dialect-aware SQL safety, typed configuration/secrets, ASP.NET Core/one-shot-worker direction, the real MySQL end-to-end milestone, and P0/P1/P2 delivery gates. D-01 through D-06 were closed or baselined; readiness increased from 4.75 to 4.88 and status changed from Draft to Implementation Ready.

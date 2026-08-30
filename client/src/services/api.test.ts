@@ -47,6 +47,35 @@ describe("parseSseFrame", () => {
     await expect(api.submitFeedback("mp3", "answer-1", "up")).resolves.toBeUndefined();
   });
 
+  it("uses the non-reserved curation route for curator APIs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new ApiClient({
+      initialize: async () => {},
+      signIn: async () => ({
+        name: "Test",
+        username: "test@example.test",
+        isCurator: true,
+        isDevelopment: false,
+      }),
+      signOut: async () => {},
+      getUser: () => null,
+      getToken: async () => "token",
+    });
+
+    await api.getGlossary("demo");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/curation\/glossary\/demo$/),
+      expect.any(Object),
+    );
+  });
+
   it("ignores unknown and empty frames", () => {
     expect(parseSseFrame(": keep-alive")).toBeNull();
     expect(parseSseFrame("event: something\ndata: value")).toBeNull();
