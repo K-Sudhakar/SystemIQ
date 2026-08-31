@@ -79,7 +79,7 @@ export function FeedbackControl({ value, disabled, onSubmit }: Props) {
               maxLength={1000}
               value={comment}
               onChange={(event) => setComment(event.target.value)}
-              placeholder="Do not include patient-identifying information."
+              placeholder="Do not include personal, confidential, or identifying information."
             />
           </label>
           <div className="feedback-form-actions">

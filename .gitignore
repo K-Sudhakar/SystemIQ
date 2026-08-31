@@ -6,6 +6,8 @@ client/dist/
 .env.*
 !.env.example
 local.settings.json
+**/appsettings.Local.json
+**/data/
 *.user
 *.suo
 .DS_Store

@@ -134,7 +134,7 @@ export function GlossaryAdmin({
       icon={<BookIcon />}
       eyebrow="Curator workspace"
       title="Business glossary"
-      description="Shape how DataIQ understands your organization’s language."
+      description="Shape how SystemIQ understands your organization’s language."
       connectionId={connectionId}
       connections={connections}
       onConnectionChange={setConnectionId}

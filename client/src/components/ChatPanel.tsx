@@ -127,7 +127,7 @@ function Welcome({ connectionName }: { connectionName: string }) {
   return (
     <div className="welcome">
       <div className="welcome-icon"><SparkIcon /></div>
-      <span className="eyebrow">DataIQ assistant</span>
+      <span className="eyebrow">SystemIQ assistant</span>
       <h1>What would you like to know?</h1>
       <p>
         Ask a business question about <strong>{connectionName}</strong>. I’ll find the
@@ -156,7 +156,7 @@ function Message({
       </div>
       <div className="message-body">
         <div className="message-meta">
-          <strong>{message.role === "assistant" ? "DataIQ" : "You"}</strong>
+          <strong>{message.role === "assistant" ? "SystemIQ" : "You"}</strong>
           <time dateTime={message.createdAt}>
             {new Date(message.createdAt).toLocaleTimeString([], {
               hour: "numeric",

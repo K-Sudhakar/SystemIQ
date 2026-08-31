@@ -42,6 +42,7 @@ describe("parseSseFrame", () => {
       signOut: async () => {},
       getUser: () => null,
       getToken: async () => "token",
+      getRequestHeaders: () => ({}),
     });
 
     await expect(api.submitFeedback("mp3", "answer-1", "up")).resolves.toBeUndefined();
@@ -66,6 +67,7 @@ describe("parseSseFrame", () => {
       signOut: async () => {},
       getUser: () => null,
       getToken: async () => "token",
+      getRequestHeaders: () => ({}),
     });
 
     await api.getGlossary("demo");
@@ -79,5 +81,37 @@ describe("parseSseFrame", () => {
   it("ignores unknown and empty frames", () => {
     expect(parseSseFrame(": keep-alive")).toBeNull();
     expect(parseSseFrame("event: something\ndata: value")).toBeNull();
+  });
+
+  it("uses headers selected by the auth adapter", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new ApiClient({
+      initialize: async () => {}, signIn: async () => ({ name: "Local", username: "local", isCurator: true, isDevelopment: true }),
+      signOut: async () => {}, getUser: () => null, getToken: async () => null,
+      getRequestHeaders: () => ({ "X-SystemIQ-Development-Identity": "fixed-local" }),
+    });
+    await api.getConnections();
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: expect.objectContaining({ "X-SystemIQ-Development-Identity": "fixed-local" }),
+    }));
+  });
+
+  it("rejects an SSE stream that ends without a complete event", async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: answer\ndata: {"content":"partial"}\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, {
+      status: 200, headers: { "Content-Type": "text/event-stream" },
+    })));
+    const api = new ApiClient({
+      initialize: async () => {}, signIn: async () => ({ name: "Test", username: "test", isCurator: false, isDevelopment: false }),
+      signOut: async () => {}, getUser: () => null, getToken: async () => null, getRequestHeaders: () => ({}),
+    });
+
+    await expect(api.streamChat("demo", "question", () => {})).rejects.toThrow("before completion");
   });
 });

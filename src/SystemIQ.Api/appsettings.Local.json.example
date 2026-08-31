@@ -1,0 +1,12 @@
+{
+  "ConnectionCatalog": {
+    "Connections": [ { "Id": "local-mysql", "DisplayName": "Local MySQL", "Provider": "MySql", "CredentialRef": "config:Secrets:MySql", "Options": { "Database": "systemiq" } } ]
+  },
+  "AccessPolicy": {
+    "Subjects": [ { "Subject": "local-curator", "Connections": [ { "Id": "local-mysql", "Objects": [ "*" ] } ] } ]
+  },
+  "AI": {
+    "Chat": { "Provider": "OpenAICompatible", "BaseUrl": "https://chat.example.invalid", "Model": "configure-me", "CredentialRef": "config:Secrets:Chat" },
+    "Embeddings": { "Provider": "OpenAICompatible", "BaseUrl": "https://embeddings.example.invalid", "Model": "Qwen/Qwen3-Embedding-8B", "Dimensions": 4096, "CredentialRef": "config:Secrets:Embeddings" }
+  }
+}

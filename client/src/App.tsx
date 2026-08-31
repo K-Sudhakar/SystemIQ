@@ -106,7 +106,7 @@ export default function App() {
           <span className="eyebrow">SystemIQ</span>
           <h1>Answers from your data,<br />in plain language.</h1>
           <p>
-            DataIQ turns everyday business questions into clear, traceable answers
+            SystemIQ turns everyday business questions into clear, traceable answers
             from the databases you’re allowed to access.
           </p>
           <button
@@ -138,11 +138,11 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><SparkIcon /></div>
-          <div><strong>SystemIQ</strong><span>DataIQ Assistant</span></div>
+          <div><strong>SystemIQ</strong><span>Natural Language SQL</span></div>
         </div>
         <nav className="main-nav" aria-label="Primary navigation">
           <NavButton active={view === "ask"} icon={<ChatIcon />} onClick={() => setView("ask")}>
-            Ask DataIQ
+            Ask SystemIQ
           </NavButton>
           {user.isCurator && (
             <>
@@ -263,7 +263,7 @@ function NoConnections() {
       <div className="empty-art"><DatabaseIcon /></div>
       <h2>No data connections available</h2>
       <p>Your current access policy does not include a database connection.</p>
-      <p className="empty-help">Contact your DataIQ administrator to request access.</p>
+      <p className="empty-help">Contact your SystemIQ administrator to request access.</p>
       <button className="button button-secondary" disabled>Chat unavailable</button>
     </section>
   );
@@ -274,7 +274,7 @@ function ConnectionError({ message }: { message: string }) {
     <section className="chat-empty card">
       <div className="error-banner" role="alert">{message}</div>
       <h2>Connections are temporarily unavailable</h2>
-      <p>Try refreshing the page. If this continues, contact your DataIQ administrator.</p>
+      <p>Try refreshing the page. If this continues, contact your SystemIQ administrator.</p>
     </section>
   );
 }
