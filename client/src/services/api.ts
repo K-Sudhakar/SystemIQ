@@ -81,6 +81,7 @@ export class ApiClient {
     init: RequestInit = {},
   ): Promise<T> {
     const token = await this.auth.getToken();
+    const authHeaders = this.auth.getRequestHeaders();
 
     const response = await fetch(`${config.apiBaseUrl}${path}`, {
       ...init,
@@ -88,12 +89,7 @@ export class ApiClient {
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(config.devAuthBypass
-          ? {
-              "x-test-user": "local-curator",
-              "x-test-role": "DataIqGlossaryEditor",
-            }
-          : {}),
+        ...authHeaders,
         ...init.headers,
       },
     });
@@ -154,6 +150,7 @@ export class ApiClient {
     signal?: AbortSignal,
   ) {
     const token = await this.auth.getToken();
+    const authHeaders = this.auth.getRequestHeaders();
 
     const response = await fetch(
       `${config.apiBaseUrl}/chat/stream`,
@@ -166,12 +163,7 @@ export class ApiClient {
           ...(token
             ? { Authorization: `Bearer ${token}` }
             : {}),
-          ...(config.devAuthBypass
-            ? {
-                "x-test-user": "local-curator",
-                "x-test-role": "DataIqGlossaryEditor",
-              }
-            : {}),
+          ...authHeaders,
         },
         body: JSON.stringify({
           connectionId,
@@ -200,6 +192,7 @@ export class ApiClient {
     const decoder = new TextDecoder();
 
     let buffer = "";
+    let completed = false;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -218,6 +211,7 @@ export class ApiClient {
           const parsed = parseSseFrame(frame);
 
           if (parsed) {
+            if (parsed.type === "complete") completed = true;
             onEvent(parsed);
           }
         });
@@ -231,8 +225,13 @@ export class ApiClient {
       const parsed = parseSseFrame(buffer);
 
       if (parsed) {
+        if (parsed.type === "complete") completed = true;
         onEvent(parsed);
       }
+    }
+
+    if (!completed) {
+      throw new Error("The response stream ended before completion.");
     }
   }
 

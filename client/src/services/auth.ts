@@ -18,6 +18,7 @@ export interface AuthService {
   signOut(): Promise<void>;
   getUser(): UserIdentity | null;
   getToken(): Promise<string | null>;
+  getRequestHeaders(): Record<string, string>;
 }
 
 const curatorRole = "DataIqGlossaryEditor";
@@ -41,6 +42,9 @@ class DevelopmentAuthService implements AuthService {
   async getToken() {
     return null;
   }
+  getRequestHeaders() {
+    return { [config.developmentHeader]: config.developmentIdentity };
+  }
 }
 
 class UnavailableAuthService implements AuthService {
@@ -57,6 +61,7 @@ class UnavailableAuthService implements AuthService {
   async getToken() {
     return null;
   }
+  getRequestHeaders() { return {}; }
 }
 
 class MsalAuthService implements AuthService {
@@ -122,6 +127,7 @@ class MsalAuthService implements AuthService {
       return result.accessToken;
     }
   }
+  getRequestHeaders() { return {}; }
 
   private toIdentity(account: AccountInfo): UserIdentity {
     return {
@@ -146,7 +152,7 @@ function tokenHasRole(token: string, role: string) {
   }
 }
 
-export const isAuthConfigured = Boolean(config.clientId && config.tenantId);
+export const isAuthConfigured = config.authMode === "Oidc" && Boolean(config.clientId && config.tenantId);
 export const isDevelopmentAuth = !isAuthConfigured && config.devAuthBypass;
 
 export const authService: AuthService =
