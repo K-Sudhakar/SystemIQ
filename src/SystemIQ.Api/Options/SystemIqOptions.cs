@@ -124,6 +124,14 @@ public sealed class HistoryOptions
     [Range(1, 1000)] public int MaxEntries { get; set; } = 100;
 }
 
+public sealed class CurationOptions
+{
+    public const string SectionName = "Curation";
+    [Range(1, 1000)] public int MaxGlossaryEntries { get; set; } = 500;
+    [Range(1, 1000)] public int MaxFeedbackReviewEntries { get; set; } = 500;
+    [Range(1, 3650)] public int MaximumAccuracyDays { get; set; } = 365;
+}
+
 public sealed class DenialStoreOptions
 {
     public const string SectionName = "DenialStore";
