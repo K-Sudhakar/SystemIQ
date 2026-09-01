@@ -52,9 +52,37 @@ public sealed class AiSqlAndRagTests
     [InlineData("SELECT SLEEP(10) FROM users")]
     [InlineData("SELECT * FROM users LIMIT 5000")]
     [InlineData("SELECT * FROM users -- directive")]
+    [InlineData("DELETE FROM users LIMIT")]
+    [InlineData("SELECT * FROM users; DROP TABLE users LIMIT")]
     public async Task AstValidator_RejectsUnsafeSql(string sql)
     {
         var result = await new MySqlSqlValidator().ValidateAsync(sql, new("mysql", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "users" }, 50), default);
+        Assert.False(result.IsAllowed);
+    }
+
+    [Theory]
+    [InlineData("SELECT department, AVG(salary) AS average_salary FROM employees GROUP BY department ORDER BY average_salary DESC LIMIT 1;")]
+    [InlineData("SELECT department, COUNT(*) AS employee_count FROM employees GROUP BY department;")]
+    [InlineData("SELECT department, SUM(salary) AS total_salary FROM employees GROUP BY department ORDER BY total_salary DESC;")]
+    [InlineData("SELECT MAX(salary) AS highest_salary FROM employees;")]
+    [InlineData("SELECT department, AVG(salary) AS average_salary FROM employees GROUP BY department HAVING AVG(salary) > 0 ORDER BY average_salary DESC LIMIT 10 OFFSET 0;")]
+    public async Task AstValidator_AllowsReadOnlyAggregateQueries(string sql)
+    {
+        var result = await new MySqlSqlValidator().ValidateAsync(sql,
+            new("mysql", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "employees" }, 50), default);
+
+        Assert.True(result.IsAllowed, result.RejectionReason);
+    }
+
+    [Theory]
+    [InlineData("DELETE FROM employees;")]
+    [InlineData("DROP TABLE employees;")]
+    [InlineData("SELECT * FROM employees; DROP TABLE employees;")]
+    public async Task AstValidator_ContinuesToRejectMutationsAndMultipleStatements(string sql)
+    {
+        var result = await new MySqlSqlValidator().ValidateAsync(sql,
+            new("mysql", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "employees" }, 50), default);
+
         Assert.False(result.IsAllowed);
     }
 

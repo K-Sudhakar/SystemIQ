@@ -118,6 +118,12 @@ public sealed class StorageOptions
 
 public sealed class FileSystemOptions { public string Root { get; set; } = "./data"; }
 
+public sealed class HistoryOptions
+{
+    public const string SectionName = "History";
+    [Range(1, 1000)] public int MaxEntries { get; set; } = 100;
+}
+
 public sealed class DenialStoreOptions
 {
     public const string SectionName = "DenialStore";

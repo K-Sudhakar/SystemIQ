@@ -19,6 +19,8 @@ using SystemIQ.Domain.Databases;
 using SystemIQ.Domain.Queries;
 using SystemIQ.Domain.Rag;
 using SystemIQ.Domain.Storage;
+using SystemIQ.Application.Feedback;
+using SystemIQ.Domain.Feedback;
 
 namespace SystemIQ.Api.Tests;
 
@@ -172,6 +174,171 @@ public sealed class ApiHostTests(ApiFactory factory) : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task History_returns_ok_with_an_empty_array_when_no_entries_exist()
+    {
+        var reader = new TestHistoryReader([]);
+        using var customFactory = WithHistoryReader(reader);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.GetAsync("/api/history/mysql-local");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("[]", await response.Content.ReadAsStringAsync());
+        Assert.Equal("local-curator", reader.Subject);
+        Assert.Equal("mysql-local", reader.ConnectionId);
+    }
+
+    [Fact]
+    public async Task History_maps_questions_and_answers_to_the_existing_frontend_contract_without_internal_details()
+    {
+        var evaluation = new QueryEvaluationMetadata("mysql", "schema-secret", "index-secret", false, 1, new(2, 3));
+        var first = new DateTimeOffset(2026, 1, 1, 10, 0, 0, TimeSpan.Zero);
+        var reader = new TestHistoryReader([
+            new QueryHistoryEntry("turn-1", "mysql-local", "First question", "First answer", "SELECT secret", 1, first, evaluation, "local-curator"),
+            new QueryHistoryEntry("turn-2", "mysql-local", "Second question", "Second answer", "SELECT other_secret", 1, first.AddMinutes(1), evaluation, "local-curator")
+        ]);
+        using var customFactory = WithHistoryReader(reader);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.GetAsync("/api/history/mysql-local");
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        var messages = document.RootElement.EnumerateArray().ToArray();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(4, messages.Length);
+        Assert.Equal(["user", "assistant", "user", "assistant"], messages.Select(message => message.GetProperty("role").GetString()));
+        Assert.Equal(["First question", "First answer", "Second question", "Second answer"], messages.Select(message => message.GetProperty("content").GetString()));
+        Assert.Equal(["turn-1:user", "turn-1", "turn-2:user", "turn-2"], messages.Select(message => message.GetProperty("id").GetString()));
+        Assert.All(messages, message => Assert.True(message.TryGetProperty("createdAt", out _)));
+        Assert.DoesNotContain("SELECT", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("schema-secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("evaluation", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task History_denies_an_unauthorized_connection_before_reading_storage()
+    {
+        var reader = new TestHistoryReader([]);
+        using var customFactory = WithHistoryReader(reader);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.GetAsync("/api/history/not-authorized");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("connection_denied", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.False(reader.WasRead);
+    }
+
+    [Fact]
+    public async Task History_storage_failure_uses_the_existing_problem_details_handler()
+    {
+        var reader = new TestHistoryReader([], new IOException("storage details must not leak"));
+        using var customFactory = WithHistoryReader(reader);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.GetAsync("/api/history/mysql-local");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("request_failed", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("storage details", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("up")]
+    [InlineData("down")]
+    public async Task Feedback_accepts_supported_ratings_and_uses_the_authenticated_subject(string rating)
+    {
+        var sink = new RecordingFeedbackSink();
+        using var customFactory = WithFeedbackSink(sink);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.PostAsJsonAsync("/api/feedback",
+            new { connectionId = "mysql-local", messageId = "answer-1", rating });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsByteArrayAsync());
+        var saved = Assert.Single(sink.Saved);
+        Assert.Equal("local-curator", saved.Subject);
+        Assert.Equal("mysql-local", saved.ConnectionId);
+        Assert.Equal("answer-1", saved.MessageId);
+        Assert.Equal(rating, saved.Rating);
+    }
+
+    [Fact]
+    public async Task Feedback_persists_optional_reason_and_comment()
+    {
+        var sink = new RecordingFeedbackSink();
+        using var customFactory = WithFeedbackSink(sink);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.PostAsJsonAsync("/api/feedback", new
+        {
+            connectionId = "mysql-local",
+            messageId = "answer-2",
+            rating = "down",
+            reason = "incorrect",
+            comment = "The total is wrong."
+        });
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var saved = Assert.Single(sink.Saved);
+        Assert.Equal("incorrect", saved.Reason);
+        Assert.Equal("The total is wrong.", saved.Comment);
+    }
+
+    [Fact]
+    public async Task Feedback_denies_an_unauthorized_connection_without_persisting()
+    {
+        var sink = new RecordingFeedbackSink();
+        using var customFactory = WithFeedbackSink(sink);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.PostAsJsonAsync("/api/feedback",
+            new { connectionId = "not-authorized", messageId = "answer-1", rating = "up" });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("connection_denied", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Empty(sink.Saved);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidFeedbackRequests))]
+    public async Task Feedback_rejects_malformed_requests(
+        string? connectionId, string? messageId, string? rating, string? reason, string? comment)
+    {
+        var sink = new RecordingFeedbackSink();
+        using var customFactory = WithFeedbackSink(sink);
+        using var client = customFactory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-SystemIQ-Development-Identity", "local-curator");
+
+        var response = await client.PostAsJsonAsync("/api/feedback",
+            new { connectionId, messageId, rating, reason, comment });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("invalid_feedback_request", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Empty(sink.Saved);
+    }
+
+    public static IEnumerable<object?[]> InvalidFeedbackRequests()
+    {
+        yield return ["mysql-local", "answer-1", "sideways", null, null];
+        yield return ["", "answer-1", "up", null, null];
+        yield return ["mysql-local", "", "up", null, null];
+        yield return ["mysql-local", "answer-1", "down", new string('r', 101), null];
+        yield return ["mysql-local", "answer-1", "down", null, new string('c', 1001)];
+    }
+
+    [Fact]
     public async Task Invalid_chat_request_returns_problem_details_with_stable_code()
     {
         using var client = factory.CreateClient();
@@ -231,6 +398,50 @@ public sealed class ApiHostTests(ApiFactory factory) : IClassFixture<ApiFactory>
         {
             var rows = new QueryRows(["count"], [new Dictionary<string, object?> { ["count"] = 3 }], false, 12);
             return Task.FromResult(new NaturalLanguageQueryResult(true, "There are three records.", rows, "SELECT COUNT(*)", null, null));
+        }
+    }
+
+    private WebApplicationFactory<Program> WithHistoryReader(TestHistoryReader reader) =>
+        factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IQueryHistoryReader>();
+            services.AddSingleton<IQueryHistoryReader>(reader);
+        }));
+
+    private WebApplicationFactory<Program> WithFeedbackSink(RecordingFeedbackSink sink) =>
+        factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IFeedbackSink>();
+            services.AddSingleton<IFeedbackSink>(sink);
+        }));
+
+    private sealed class RecordingFeedbackSink : IFeedbackSink
+    {
+        public List<FeedbackEntry> Saved { get; } = [];
+
+        public Task SaveAsync(FeedbackEntry entry, CancellationToken cancellationToken)
+        {
+            Saved.Add(entry);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class TestHistoryReader(
+        IReadOnlyList<QueryHistoryEntry> entries,
+        Exception? failure = null) : IQueryHistoryReader
+    {
+        public bool WasRead { get; private set; }
+        public string? Subject { get; private set; }
+        public string? ConnectionId { get; private set; }
+
+        public Task<IReadOnlyList<QueryHistoryEntry>> ReadAsync(
+            string subject, string connectionId, int maxEntries, CancellationToken cancellationToken)
+        {
+            WasRead = true;
+            Subject = subject;
+            ConnectionId = connectionId;
+            if (failure is not null) throw failure;
+            return Task.FromResult(entries);
         }
     }
 
