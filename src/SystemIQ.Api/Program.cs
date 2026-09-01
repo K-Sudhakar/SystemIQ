@@ -10,16 +10,19 @@ using SystemIQ.Api.Services;
 using SystemIQ.Application.Databases;
 using SystemIQ.Application.AI;
 using SystemIQ.Application.Feedback;
+using SystemIQ.Application.Glossary;
 using SystemIQ.Application.Queries;
 using SystemIQ.Application.Rag;
 using SystemIQ.Application.Secrets;
 using SystemIQ.Application.Storage;
 using SystemIQ.Domain.Queries;
 using SystemIQ.Domain.Feedback;
+using SystemIQ.Domain.Glossary;
 using SystemIQ.Domain.Storage;
 using SystemIQ.Infrastructure.AI;
 using SystemIQ.Infrastructure.Databases;
 using SystemIQ.Infrastructure.Denials;
+using SystemIQ.Infrastructure.Glossary;
 using SystemIQ.Infrastructure.Rag;
 using SystemIQ.Infrastructure.Secrets;
 using SystemIQ.Infrastructure.Storage;
@@ -90,7 +93,12 @@ builder.Services.TryAddSingleton<ISecurityAuditSink, FileSystemSecurityAuditSink
 builder.Services.TryAddSingleton<FileSystemQueryHistorySink>();
 builder.Services.TryAddSingleton<IQueryHistorySink>(services => services.GetRequiredService<FileSystemQueryHistorySink>());
 builder.Services.TryAddSingleton<IQueryHistoryReader>(services => services.GetRequiredService<FileSystemQueryHistorySink>());
-builder.Services.TryAddSingleton<IFeedbackSink, FileSystemFeedbackSink>();
+builder.Services.TryAddSingleton<FileSystemFeedbackSink>();
+builder.Services.TryAddSingleton<IFeedbackSink>(services => services.GetRequiredService<FileSystemFeedbackSink>());
+builder.Services.TryAddSingleton<IFeedbackReviewStore>(services => services.GetRequiredService<FileSystemFeedbackSink>());
+builder.Services.TryAddSingleton<IAccuracyReportReader, FileSystemAccuracyReportReader>();
+builder.Services.TryAddSingleton<IGlossaryStore, FileSystemGlossaryStore>();
+builder.Services.TryAddSingleton<IGlossaryDefaultsProvider, SchemaGlossaryDefaultsProvider>();
 builder.Services.TryAddSingleton(services =>
 {
     var safety = services.GetRequiredService<IOptions<SqlSafetyOptions>>().Value;
@@ -187,6 +195,136 @@ app.MapPost("/api/feedback", async (
     return Results.NoContent();
 }).RequireAuthorization();
 
+app.MapGet("/api/curation/glossary/{connectionId}", async (
+    string connectionId,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IGlossaryStore glossary,
+    IOptions<CurationOptions> curationOptions,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    var connection = policy.CanAccessConnection(connectionId) ? await catalog.FindAsync(connectionId, ct) : null;
+    if (connection is null) return ConnectionDenied();
+    var authorizedObjects = policy.ObjectsFor(connection.Id);
+    var entries = await glossary.ListAsync(subject, connection.Id, curationOptions.Value.MaxGlossaryEntries, ct);
+    return Results.Ok(entries.Where(entry => GlossaryEntryRules.IsAuthorizedTable(entry.Table, authorizedObjects)));
+}).RequireAuthorization("Curator");
+
+app.MapGet("/api/curation/glossary/{connectionId}/defaults", async (
+    string connectionId,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IGlossaryDefaultsProvider defaults,
+    IOptions<CurationOptions> curationOptions,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    var connection = policy.CanAccessConnection(connectionId) ? await catalog.FindAsync(connectionId, ct) : null;
+    if (connection is null) return ConnectionDenied();
+    return Results.Ok(await defaults.GetAsync(connection, policy.ObjectsFor(connection.Id),
+        curationOptions.Value.MaxGlossaryEntries, ct));
+}).RequireAuthorization("Curator");
+
+app.MapPut("/api/curation/glossary/{connectionId}/{table}", async (
+    string connectionId,
+    string table,
+    GlossaryEntry command,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IGlossaryStore glossary,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var validationError = GlossaryEntryRules.Validate(command);
+    if (validationError is not null || !command.ConnectionId.Equals(connectionId, StringComparison.OrdinalIgnoreCase) ||
+        !command.Table.Equals(table, StringComparison.OrdinalIgnoreCase))
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid glossary entry",
+            detail: validationError ?? "Route and payload identifiers must match.",
+            extensions: new Dictionary<string, object?> { ["code"] = "invalid_glossary_entry" });
+
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    var connection = policy.CanAccessConnection(connectionId) ? await catalog.FindAsync(connectionId, ct) : null;
+    if (connection is null || !GlossaryEntryRules.IsAuthorizedTable(command.Table, policy.ObjectsFor(connectionId)))
+        return ConnectionDenied();
+    var normalized = GlossaryEntryRules.Normalize(command, connection.Id);
+    return Results.Ok(await glossary.UpsertAsync(subject, normalized, ct));
+}).RequireAuthorization("Curator");
+
+app.MapGet("/api/curation/feedback", async (
+    string? connectionId,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IFeedbackReviewStore reviews,
+    IOptions<CurationOptions> curationOptions,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    if (!string.IsNullOrWhiteSpace(connectionId) &&
+        (!policy.CanAccessConnection(connectionId) || await catalog.FindAsync(connectionId, ct) is null))
+        return ConnectionDenied();
+    var entries = await reviews.ListPendingAsync(subject, policy.ConnectionIds, connectionId,
+        curationOptions.Value.MaxFeedbackReviewEntries, ct);
+    return Results.Ok(entries.Select(ToFeedbackReviewContract));
+}).RequireAuthorization("Curator");
+
+app.MapPost("/api/curation/feedback/process", async (
+    IConnectionAccessPolicyProvider policies,
+    IFeedbackReviewStore reviews,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    return Results.Ok(new { processed = await reviews.ProcessAsync(subject, policy.ConnectionIds, ct) });
+}).RequireAuthorization("Curator");
+
+app.MapPost("/api/curation/feedback/{id}/resolve", async (
+    string id,
+    IConnectionAccessPolicyProvider policies,
+    IFeedbackReviewStore reviews,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    return await reviews.ResolveAsync(subject, policy.ConnectionIds, id, ct)
+        ? Results.NoContent()
+        : Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Feedback review unavailable",
+            extensions: new Dictionary<string, object?> { ["code"] = "feedback_review_unavailable" });
+}).RequireAuthorization("Curator");
+
+app.MapGet("/api/curation/accuracy-report", async (
+    int days,
+    IConnectionAccessPolicyProvider policies,
+    IAccuracyReportReader reports,
+    IOptions<CurationOptions> curationOptions,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    if (days <= 0 || days > curationOptions.Value.MaximumAccuracyDays)
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid accuracy report range",
+            extensions: new Dictionary<string, object?> { ["code"] = "invalid_accuracy_range" });
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    return Results.Ok(await reports.ReadAsync(subject, policy.ConnectionIds,
+        TimeProvider.System.GetUtcNow().AddDays(-days), ct));
+}).RequireAuthorization("Curator");
+
 app.MapPost("/api/chat/stream", async (ChatRequestContract command, IConnectionCatalog catalog,
     IConnectionAccessPolicyProvider policies, INaturalLanguageQueryOrchestrator orchestrator,
     IOptions<AiOptions> aiOptions, IOptions<RagOptions> ragOptions, IOptions<AuthOptions> authOptions,
@@ -282,6 +420,7 @@ static void BindOptions(IServiceCollection services, IConfiguration configuratio
     services.AddOptions<SystemIqOptions>().Bind(configuration.GetSection(SystemIqOptions.SectionName)).ValidateOnStart();
     services.AddOptions<StorageOptions>().Bind(configuration.GetSection(StorageOptions.SectionName)).ValidateOnStart();
     services.AddOptions<HistoryOptions>().Bind(configuration.GetSection(HistoryOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
+    services.AddOptions<CurationOptions>().Bind(configuration.GetSection(CurationOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<DenialStoreOptions>().Bind(configuration.GetSection(DenialStoreOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<DatabaseOptions>().Bind(configuration.GetSection(DatabaseOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<ConnectionCatalogOptions>().Bind(configuration.GetSection(ConnectionCatalogOptions.SectionName))
@@ -307,6 +446,14 @@ static string GetSubject(HttpContext context, AuthOptions auth) =>
     context.User.FindFirst(auth.SubjectClaim)?.Value ??
     context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
 
+static IResult ConnectionDenied() =>
+    Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Connection unavailable",
+        extensions: new Dictionary<string, object?> { ["code"] = "connection_denied" });
+
+static FeedbackReviewContract ToFeedbackReviewContract(FeedbackReviewEntry entry) => new(
+    entry.Id, entry.ConnectionId, entry.MessageId, entry.Question, entry.MatchedTerms, entry.MatchedTables,
+    entry.Reason, entry.Comment, entry.CreatedAt);
+
 public partial class Program;
 
 public sealed record ChatRequestContract(string ConnectionId, string Question);
@@ -317,3 +464,13 @@ public sealed record FeedbackRequestContract(
     string? Rating,
     string? Reason,
     string? Comment);
+public sealed record FeedbackReviewContract(
+    string Id,
+    string ConnectionId,
+    string MessageId,
+    string Question,
+    IReadOnlyList<string> MatchedTerms,
+    IReadOnlyList<string> MatchedTables,
+    string? Reason,
+    string? Comment,
+    DateTimeOffset CreatedAt);

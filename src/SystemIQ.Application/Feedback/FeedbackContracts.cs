@@ -7,6 +7,22 @@ public interface IFeedbackSink
     Task SaveAsync(FeedbackEntry entry, CancellationToken cancellationToken);
 }
 
+public interface IFeedbackReviewStore
+{
+    Task<IReadOnlyList<FeedbackReviewEntry>> ListPendingAsync(
+        string subject, IReadOnlySet<string> connectionIds, string? connectionId,
+        int maxEntries, CancellationToken cancellationToken);
+    Task<int> ProcessAsync(string subject, IReadOnlySet<string> connectionIds, CancellationToken cancellationToken);
+    Task<bool> ResolveAsync(
+        string subject, IReadOnlySet<string> connectionIds, string id, CancellationToken cancellationToken);
+}
+
+public interface IAccuracyReportReader
+{
+    Task<AccuracyReport> ReadAsync(
+        string subject, IReadOnlySet<string> connectionIds, DateTimeOffset since, CancellationToken cancellationToken);
+}
+
 public static class FeedbackRequestRules
 {
     public const int MaximumConnectionIdLength = 128;
