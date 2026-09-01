@@ -6,6 +6,7 @@ using SystemIQ.Infrastructure.Storage;
 using SystemIQ.Domain.Secrets;
 using SystemIQ.Domain.Storage;
 using SystemIQ.Domain.Queries;
+using SystemIQ.Domain.Feedback;
 
 namespace SystemIQ.Infrastructure.Tests;
 
@@ -90,6 +91,62 @@ public sealed class SecretsAndStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task QueryHistoryReader_uses_document_store_and_isolates_sorts_and_bounds_entries()
+    {
+        var documents = new FileSystemDocumentStore(_root);
+        var history = new FileSystemQueryHistorySink(documents);
+        var evaluation = new QueryEvaluationMetadata("mysql", "schema", "index", false, 2, new(3, 4));
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        await history.SaveAsync(History("old", "local-curator", "local-mysql", start, evaluation), default);
+        await history.SaveAsync(History("new", "local-curator", "local-mysql", start.AddMinutes(2), evaluation), default);
+        await history.SaveAsync(History("middle", "local-curator", "local-mysql", start.AddMinutes(1), evaluation), default);
+        await history.SaveAsync(History("other-connection", "local-curator", "other-mysql", start.AddMinutes(3), evaluation), default);
+        await history.SaveAsync(History("other-subject", "someone-else", "local-mysql", start.AddMinutes(4), evaluation), default);
+
+        var loaded = await history.ReadAsync("local-curator", "local-mysql", 2, default);
+
+        Assert.Equal(["middle", "new"], loaded.Select(entry => entry.CorrelationId));
+        Assert.All(loaded, entry => Assert.Equal("local-curator", entry.Subject));
+        Assert.All(loaded, entry => Assert.Equal("local-mysql", entry.ConnectionId));
+    }
+
+    [Fact]
+    public async Task QueryHistoryReader_honors_storage_cancellation()
+    {
+        var history = new FileSystemQueryHistorySink(new FileSystemDocumentStore(_root));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await history.ReadAsync("local-curator", "local-mysql", 100, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task FeedbackSink_persists_minimal_entries_with_stable_subject_isolated_keys()
+    {
+        var documents = new FileSystemDocumentStore(_root);
+        var sink = new FileSystemFeedbackSink(documents);
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var first = new FeedbackEntry("subject-a", "local-mysql", "message-1", "down", "incorrect", "Details", now);
+
+        await sink.SaveAsync(first, default);
+        await sink.SaveAsync(first with { Comment = "Updated details", CreatedAt = now.AddMinutes(1) }, default);
+        await sink.SaveAsync(first with { Subject = "subject-b", Comment = null }, default);
+
+        var stored = new List<Document<FeedbackEntry>>();
+        await foreach (var document in documents.ListAsync<FeedbackEntry>(
+            new DocumentPrefix("query-feedback", []), default)) stored.Add(document);
+
+        Assert.Equal(2, stored.Count);
+        Assert.All(stored, document => Assert.Matches("^[a-f0-9]{64}$", document.Key.Segments.Single()));
+        Assert.Contains(stored, document => document.Value.Subject == "subject-a" &&
+            document.Value.Comment == "Updated details" && document.Value.Reason == "incorrect");
+        Assert.Contains(stored, document => document.Value.Subject == "subject-b");
+        Assert.All(stored, document => Assert.Equal("local-mysql", document.Value.ConnectionId));
+        Assert.All(stored, document => Assert.Equal("message-1", document.Value.MessageId));
+    }
+
+    [Fact]
     public async Task SecurityAuditSink_PersistsAppendOnlyAuditEvent()
     {
         var documents = new FileSystemDocumentStore(_root);
@@ -132,4 +189,8 @@ public sealed class SecretsAndStorageTests : IDisposable
     }
 
     private sealed record Payload(string Value);
+
+    private static QueryHistoryEntry History(string id, string subject, string connectionId,
+        DateTimeOffset completedAt, QueryEvaluationMetadata evaluation) =>
+        new(id, connectionId, $"question-{id}", $"answer-{id}", "SELECT 1", 1, completedAt, evaluation, subject);
 }

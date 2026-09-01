@@ -9,11 +9,13 @@ using SystemIQ.Api.Security;
 using SystemIQ.Api.Services;
 using SystemIQ.Application.Databases;
 using SystemIQ.Application.AI;
+using SystemIQ.Application.Feedback;
 using SystemIQ.Application.Queries;
 using SystemIQ.Application.Rag;
 using SystemIQ.Application.Secrets;
 using SystemIQ.Application.Storage;
 using SystemIQ.Domain.Queries;
+using SystemIQ.Domain.Feedback;
 using SystemIQ.Domain.Storage;
 using SystemIQ.Infrastructure.AI;
 using SystemIQ.Infrastructure.Databases;
@@ -85,7 +87,10 @@ builder.Services.TryAddSingleton(services => new SqliteAccessDenialStore(
     services.GetRequiredService<IOptions<DenialStoreOptions>>().Value.ConnectionString));
 builder.Services.TryAddSingleton<IAccessDenialStore>(services => services.GetRequiredService<SqliteAccessDenialStore>());
 builder.Services.TryAddSingleton<ISecurityAuditSink, FileSystemSecurityAuditSink>();
-builder.Services.TryAddSingleton<IQueryHistorySink, FileSystemQueryHistorySink>();
+builder.Services.TryAddSingleton<FileSystemQueryHistorySink>();
+builder.Services.TryAddSingleton<IQueryHistorySink>(services => services.GetRequiredService<FileSystemQueryHistorySink>());
+builder.Services.TryAddSingleton<IQueryHistoryReader>(services => services.GetRequiredService<FileSystemQueryHistorySink>());
+builder.Services.TryAddSingleton<IFeedbackSink, FileSystemFeedbackSink>();
 builder.Services.TryAddSingleton(services =>
 {
     var safety = services.GetRequiredService<IOptions<SqlSafetyOptions>>().Value;
@@ -116,6 +121,70 @@ app.MapGet("/api/connections", async (IConnectionCatalog catalog, IConnectionAcc
     var subject = GetSubject(context, authOptions.Value);
     var policy = await policies.GetAsync(subject, ct);
     return Results.Ok(await catalog.ListPermittedAsync(policy, ct));
+}).RequireAuthorization();
+
+app.MapGet("/api/history/{connectionId}", async (
+    string connectionId,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IQueryHistoryReader history,
+    IOptions<HistoryOptions> historyOptions,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    var connection = policy.CanAccessConnection(connectionId)
+        ? await catalog.FindAsync(connectionId, ct)
+        : null;
+    if (connection is null)
+        return Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Connection unavailable",
+            extensions: new Dictionary<string, object?> { ["code"] = "connection_denied" });
+
+    var entries = await history.ReadAsync(subject, connection.Id, historyOptions.Value.MaxEntries, ct);
+    var messages = entries.SelectMany(entry => new[]
+    {
+        new HistoryMessageContract($"{entry.CorrelationId}:user", "user", entry.Question, entry.CompletedAt),
+        new HistoryMessageContract(entry.CorrelationId, "assistant", entry.Answer, entry.CompletedAt)
+    });
+    return Results.Ok(messages);
+}).RequireAuthorization();
+
+app.MapPost("/api/feedback", async (
+    FeedbackRequestContract command,
+    IConnectionCatalog catalog,
+    IConnectionAccessPolicyProvider policies,
+    IFeedbackSink feedback,
+    IOptions<AuthOptions> authOptions,
+    HttpContext context,
+    CancellationToken ct) =>
+{
+    var validationError = FeedbackRequestRules.Validate(
+        command.ConnectionId, command.MessageId, command.Rating, command.Reason, command.Comment);
+    if (validationError is not null)
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid feedback request",
+            detail: validationError,
+            extensions: new Dictionary<string, object?> { ["code"] = "invalid_feedback_request" });
+
+    var subject = GetSubject(context, authOptions.Value);
+    var policy = await policies.GetAsync(subject, ct);
+    var connection = policy.CanAccessConnection(command.ConnectionId!)
+        ? await catalog.FindAsync(command.ConnectionId!, ct)
+        : null;
+    if (connection is null)
+        return Results.Problem(statusCode: StatusCodes.Status403Forbidden, title: "Connection unavailable",
+            extensions: new Dictionary<string, object?> { ["code"] = "connection_denied" });
+
+    await feedback.SaveAsync(new FeedbackEntry(
+        subject,
+        connection.Id,
+        command.MessageId!.Trim(),
+        command.Rating!,
+        FeedbackRequestRules.NormalizeOptional(command.Reason),
+        FeedbackRequestRules.NormalizeOptional(command.Comment),
+        TimeProvider.System.GetUtcNow()), ct);
+    return Results.NoContent();
 }).RequireAuthorization();
 
 app.MapPost("/api/chat/stream", async (ChatRequestContract command, IConnectionCatalog catalog,
@@ -212,6 +281,7 @@ static void BindOptions(IServiceCollection services, IConfiguration configuratio
 {
     services.AddOptions<SystemIqOptions>().Bind(configuration.GetSection(SystemIqOptions.SectionName)).ValidateOnStart();
     services.AddOptions<StorageOptions>().Bind(configuration.GetSection(StorageOptions.SectionName)).ValidateOnStart();
+    services.AddOptions<HistoryOptions>().Bind(configuration.GetSection(HistoryOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<DenialStoreOptions>().Bind(configuration.GetSection(DenialStoreOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<DatabaseOptions>().Bind(configuration.GetSection(DatabaseOptions.SectionName)).ValidateDataAnnotations().ValidateOnStart();
     services.AddOptions<ConnectionCatalogOptions>().Bind(configuration.GetSection(ConnectionCatalogOptions.SectionName))
@@ -240,3 +310,10 @@ static string GetSubject(HttpContext context, AuthOptions auth) =>
 public partial class Program;
 
 public sealed record ChatRequestContract(string ConnectionId, string Question);
+public sealed record HistoryMessageContract(string Id, string Role, string Content, DateTimeOffset CreatedAt);
+public sealed record FeedbackRequestContract(
+    string? ConnectionId,
+    string? MessageId,
+    string? Rating,
+    string? Reason,
+    string? Comment);

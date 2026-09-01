@@ -10,3 +10,8 @@ public interface IQueryHistorySink
 {
     Task SaveAsync(QueryHistoryEntry entry, CancellationToken cancellationToken);
 }
+public interface IQueryHistoryReader
+{
+    Task<IReadOnlyList<QueryHistoryEntry>> ReadAsync(
+        string subject, string connectionId, int maxEntries, CancellationToken cancellationToken);
+}

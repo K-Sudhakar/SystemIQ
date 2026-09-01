@@ -60,6 +60,25 @@ public sealed class FoundationTests
     }
 
     [Fact]
+    public void Query_history_selection_isolates_subject_and_connection_then_returns_latest_entries_chronologically()
+    {
+        var evaluation = new QueryEvaluationMetadata("mysql", "schema", "index", false, 1, new(1, 1));
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var entries = new[]
+        {
+            History("old", "local-curator", "local-mysql", start, evaluation),
+            History("middle", "local-curator", "local-mysql", start.AddMinutes(1), evaluation),
+            History("new", "local-curator", "local-mysql", start.AddMinutes(2), evaluation),
+            History("other-connection", "local-curator", "other-mysql", start.AddMinutes(3), evaluation),
+            History("other-subject", "someone-else", "local-mysql", start.AddMinutes(4), evaluation)
+        };
+
+        var selected = QueryHistorySelection.Select(entries, "local-curator", "LOCAL-MYSQL", 2);
+
+        Assert.Equal(["middle", "new"], selected.Select(entry => entry.CorrelationId));
+    }
+
+    [Fact]
     public async Task Retriever_filters_before_ranking_and_prioritizes_exact_terms()
     {
         var chunks = new[]
@@ -85,6 +104,10 @@ public sealed class FoundationTests
         new(id, connection, RagSourceType.Table, objectName, text, new EmbeddingVector(vector, 2),
             new RagCompatibility("schema-1", "glossary-1", "embed", "model", 2, "content-1", "index-1"),
             new ReadOnlyDictionary<string, string>(new Dictionary<string, string>()));
+
+    private static QueryHistoryEntry History(string id, string subject, string connectionId,
+        DateTimeOffset completedAt, QueryEvaluationMetadata evaluation) =>
+        new(id, connectionId, $"question-{id}", $"answer-{id}", "SELECT 1", 1, completedAt, evaluation, subject);
 
     private sealed class StubEmbeddingProvider(string id, int dimensions, float[]? vector = null) : IEmbeddingProvider
     {
